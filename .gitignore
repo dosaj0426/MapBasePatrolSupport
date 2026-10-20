@@ -1,0 +1,23 @@
+node_modules/
+dist/
+.venv/
+.tts-venv/
+backend/models/
+.tools/
+__pycache__/
+*.pyc
+.env
+.pnpm-store/
+*.log
+backend/data/
+
+
+# Local verification outputs and private runtime files
+/*.png
+/output/
+/backend/test-db-*/
+.env.*
+!.env.example
+*.db
+*.db-*
+*.sqlite*

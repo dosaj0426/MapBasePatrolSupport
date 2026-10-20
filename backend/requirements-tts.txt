@@ -1,0 +1,5 @@
+qwen-tts==0.1.1
+torch==2.7.1
+torchaudio==2.7.1
+fastapi>=0.115,<1
+uvicorn>=0.34,<1

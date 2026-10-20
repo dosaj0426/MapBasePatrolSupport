@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="referrer" content="strict-origin-when-cross-origin" />
+    <title>스마트 순찰 지원</title>
+  </head>
+  <body>
+    <div id="root"><section id="startup-status" style="position:fixed;inset:0;background:#f3f6fa;color:#182b40;padding:48px 24px;font-family:sans-serif;line-height:1.8">
+      <h1 style="font-size:22px">순찰 화면을 준비하고 있습니다</h1>
+      <p id="startup-message">서버 연결 완료 · 화면 파일을 불러오는 중입니다.</p>
+      <button onclick="location.reload()" style="padding:12px 18px">다시 시도</button>
+    </section></div>
+    <script>
+      (function () {
+        function show(message) {
+          var node = document.getElementById('startup-message');
+          if (node) node.textContent = message;
+        }
+        window.addEventListener('error', function (event) {
+          if (event.target && event.target.tagName === 'SCRIPT') show('화면 파일 다운로드에 실패했습니다. 브라우저를 업데이트하거나 다른 브라우저에서 다시 접속해 주세요.');
+          else if (event.message) show('화면 실행 오류: ' + event.message);
+        }, true);
+        setTimeout(function () { show('화면 파일 로딩이 지연되고 있습니다. 최신 Chrome 또는 Safari에서 다시 시도해 주세요.'); }, 15000);
+      }());
+    </script>
+    <script type="module" src="/src/main.jsx"></script>
+    <script nomodule>document.getElementById('startup-message').textContent = '이 브라우저는 지원되지 않습니다. 최신 Chrome 또는 Safari로 접속해 주세요.';</script>
+  </body>
+</html>

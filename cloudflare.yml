@@ -1,0 +1,6 @@
+tunnel: a14a809f-bb13-4b12-a215-c70f469e8e3e
+credentials-file: .tools/safety-map.json
+ingress:
+  - hostname: safety-map.mcrolcharge.com
+    service: http://127.0.0.1:5173
+  - service: http_status:404

@@ -1,0 +1,63 @@
+/* 패널만 투명하게 하고 카드 텍스트는 불투명하게 유지한다. */
+.patrol-screen .notification-panel {
+  --notification-panel-alpha: .46;
+  background: rgb(255 255 255 / var(--notification-panel-alpha));
+  border-color: #ffffffa6;
+  box-shadow: 0 8px 30px #18352d14;
+  backdrop-filter: blur(7px);
+  display: flex;
+  flex-direction: column;
+  min-height: min(240px, calc(100dvh - 200px));
+  max-height: calc(100dvh - 200px);
+  overflow: hidden;
+}
+.notification-panel .notification-list {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  padding: 2px 16px 16px;
+  flex: 1 1 0;
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.notification-panel > :not(.notification-list) { flex-shrink: 0; }
+.notification-resize-handle { height: 18px; display: grid; place-items: center; cursor: ns-resize; touch-action: none; user-select: none; }
+.notification-resize-handle span { width: 34px; height: 3px; border-radius: 3px; background: #7a968b; }
+.notification-resize-handle:focus-visible { outline: 2px solid #087c69; outline-offset: -3px; }
+.notification-card {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  border: 1px solid color-mix(in srgb, var(--alert-accent) 17%, white);
+  border-left: 4px solid var(--alert-accent);
+  border-radius: 12px;
+  padding: 14px 15px;
+  background: var(--alert-bg);
+  box-shadow: 0 3px 9px #17352c0a;
+  overflow-wrap: anywhere;
+}
+.notification-card.is-read { --alert-accent: #929a97 !important; --alert-bg: #f0f1f1 !important; --alert-text: #69736f !important; --alert-badge: #e0e4e2 !important; box-shadow: none; }
+.notification-card.is-read p { color: #79837e; }
+.notification-card:hover { filter: brightness(.98); }
+.notification-card:focus-visible { outline: 2px solid var(--alert-accent); outline-offset: 2px; }
+.notification-toggle { position: absolute; top: 28px; right: 28px; z-index: 3; width: 54px; height: 54px; display: grid; place-items: center; cursor: pointer; }
+.notification-toggle img { width: 26px; height: 26px; object-fit: contain; }
+.notification-toggle > span { position: absolute; top: -5px; right: -5px; border-radius: 12px; padding: 2px 6px; background: #c93648; color: white; font-size: 10px; }
+.notification-heading-actions { display: flex; align-items: center; gap: 10px; }
+.notification-heading-actions button { border: 0; background: transparent; font-size: 22px; color: #527366; cursor: pointer; width: 30px; height: 30px; }
+.notification-empty { text-align: center; color: #60756b; font-size: 12px; padding-top: 20px; }
+@media(max-width:760px) { .notification-toggle { top: 16px; right: 16px; } }
+.notification-card-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.notification-type { display: inline-flex; align-items: center; gap: 5px; padding: 3px 7px; border-radius: 5px; font-size: 10px; font-weight: 700; color: var(--alert-text); background: var(--alert-badge); }
+.notification-type > span { width: 5px; height: 5px; background: var(--alert-accent); border-radius: 50%; }
+.notification-card time { color: #73847e; font-size: 10px; white-space: nowrap; }
+.notification-card h3 { font-size: 13px; color: var(--alert-text); margin: 11px 0 6px; line-height: 1.6; }
+.notification-card p { color: #52665e; font-size: 12px; margin: 0; line-height: 1.75; }
+.notification-panel .notification-footer { background: #ffffff42; border-top-color: #ffffff80; color: #4b655b; }
+.notification-panel .notification-subtitle { color: #526b60; }
+@media(max-width:760px) { .notification-panel .notification-list { max-height: none; padding: 2px 12px 12px; gap: 10px; } }
+
