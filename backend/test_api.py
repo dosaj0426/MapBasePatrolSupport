@@ -11,12 +11,43 @@ temporary = tempfile.TemporaryDirectory(prefix='test-db-', dir=test_root)
 assert Path(temporary.name).resolve().parent == test_root
 os.environ['PATROL_DATA_DIR'] = temporary.name
 os.environ['DATABASE_URL'] = 'sqlite:///' + temporary.name.replace('\\', '/') + '/test.db'
-from app.main import app
+from app.main import app, prepare_speech as prepare_all_speech
 from app.store import engine
 from app.geo import zone_transition
 from fastapi.testclient import TestClient
 
 class ApiTests(unittest.TestCase):
+    def test_browser_tts_default_does_not_call_model(self):
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        with patch('app.main.LOCAL_TTS_ENABLED',False), patch('app.main.httpx.post') as post:
+            self.assertEqual(self.client.get('/api/tts/status').json()['mode'],'browser')
+            self.assertEqual(self.client.post('/api/tts/synthesize',json={'text':'안내'}).status_code,503)
+            prepare_all_speech(SimpleNamespace(name='테스트',message=''))
+            post.assert_not_called()
+
+    def test_directional_speech_preparation_and_cache(self):
+        from unittest.mock import patch, Mock
+        from types import SimpleNamespace
+        from threading import Event
+        from app.geo import zone_message
+        from tts.common import audio_key
+        with tempfile.TemporaryDirectory(dir=test_root) as directory:
+            cache=Path(directory)
+            place=SimpleNamespace(name='음성 검증관',message='주변을 확인해 주세요.')
+            ready=zone_message(place.name,place.message,'좌측')
+            (cache/(audio_key(ready)+'.wav')).write_bytes(b'cached')
+            with patch('app.main.LOCAL_TTS_ENABLED',True), patch('app.main.TTS_CACHE',cache), patch('app.main.httpx.post',return_value=Mock()) as post:
+                prepare_all_speech(place)
+                texts=[call.kwargs['json']['text'] for call in post.call_args_list]
+                expected={zone_message(place.name,place.message,side) for side in ('전방','후방','좌측','우측',None)}-{ready}
+                self.assertEqual(set(texts),expected)
+                self.assertEqual(len(texts),4)
+                post.reset_mock()
+                stop=Event();stop.set()
+                prepare_all_speech(place,stop)
+                post.assert_not_called()
+
     @classmethod
     def setUpClass(cls):
         from unittest.mock import patch
@@ -198,6 +229,47 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(preview('지점명,분류,도로명주소\n'+('a,b,테스트 주소\n'*51)).status_code,422)
         self.assertEqual(c.post('/api/places/import/preview',files={'file':('large.csv',b'x'*(1024*1024+1),'text/csv')}).status_code,422)
 
+    def test_relative_direction_and_korean_voice(self):
+        from app.geo import relative_side, zone_message
+        origin=(35,129)
+        self.assertEqual(relative_side(origin,(35,129.001),0),'우측')
+        self.assertEqual(relative_side(origin,(35,128.999),0),'좌측')
+        self.assertEqual(relative_side(origin,(35.001,129),359),'전방')
+        self.assertEqual(relative_side(origin,(34.999,129),0),'후방')
+        self.assertEqual(relative_side(origin,(35.001,129),90),'좌측')
+        self.assertIsNone(relative_side(origin,origin,90))
+        self.assertIsNone(relative_side(origin,(35,129.001),None))
+        self.assertIsNone(relative_side(origin,(35,129.001),0,minimum_distance=200))
+        self.assertEqual(zone_message('정보공학관',side='좌측'),'좌측에 정보공학관이 있습니다.')
+        self.assertEqual(zone_message('부산진경찰서',side='우측'),'우측에 부산진경찰서가 있습니다.')
+        self.assertEqual(zone_message('CCTV',side='좌측'),'좌측에 CCTV가 있습니다.')
+        self.assertEqual(zone_message('정보공학관','주변을 확인해 주세요.','좌측'),'좌측에 정보공학관이 있습니다. 주변을 확인해 주세요.')
+        c=self.client
+        officer=c.post('/api/officers',json={'name':'좌우 음성 검증'}).json()
+        place=c.post('/api/places',json={'name':'음성검증관','category':'테스트','address':'테스트 주소','lat':35,'lng':129,'enhanced':True,'radius':100,'multiplier':1.5}).json()
+        base=datetime.now(timezone.utc)
+        from datetime import timedelta
+        def locate(lng,heading=0,age=0,source='demo',heading_source='demo',accuracy=0):
+            nonlocal base
+            base+=timedelta(seconds=1)
+            point={'lat':35,'lng':lng,'source':source,'accuracy':accuracy,'measured_at':base.isoformat(),'orientation':{'heading':heading,'source':heading_source,'measured_at':(base-timedelta(seconds=age)).isoformat()}}
+            self.assertEqual(c.post(f"/api/officers/{officer['id']}/location",json=point).status_code,200)
+        locate(129.0005)
+        alerts=lambda:c.get(f"/api/officers/{officer['id']}/alerts").json()
+        self.assertIn('좌측에 음성검증관이 있습니다.',alerts()[-1]['body'])
+        locate(129.002);locate(128.9995)
+        self.assertIn('우측에 음성검증관이 있습니다.',alerts()[-1]['body'])
+        locate(129.002);locate(128.9995,age=11)
+        self.assertNotIn('우측에',alerts()[-1]['body'])
+        locate(129.002);locate(128.9995,heading_source='sensor')
+        self.assertIn('우측에 음성검증관이 있습니다.',alerts()[-1]['body'])
+        locate(129.002);locate(128.9995,heading_source='sensor',age=11)
+        self.assertNotIn('우측에',alerts()[-1]['body'])
+        locate(129.002);locate(129)
+        self.assertNotIn('좌측에',alerts()[-1]['body'])
+        self.assertNotIn('우측에',alerts()[-1]['body'])
+        c.delete(f"/api/places/{place['id']}")
+
     def test_heading_update_is_independent_and_validated(self):
         from datetime import timedelta
         c = self.client
@@ -254,7 +326,7 @@ class ApiTests(unittest.TestCase):
             class Response:
                 def raise_for_status(self): pass
             return Response()
-        with patch('app.main.TTS_CACHE', cache), patch('app.main.httpx.post', side_effect=create_audio) as generate:
+        with patch('app.main.LOCAL_TTS_ENABLED',True), patch('app.main.TTS_CACHE', cache), patch('app.main.httpx.post', side_effect=create_audio) as generate:
             first = self.client.post('/api/tts/synthesize', json={'text': text})
             self.assertEqual(first.status_code, 200)
             second = self.client.post('/api/tts/synthesize', json={'text': '[데모] ' + text})

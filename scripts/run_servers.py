@@ -95,7 +95,8 @@ def main():
     node = shutil.which('node.exe') or str(Path.home() / '.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe')
     vite = ROOT / 'frontend/node_modules/vite/bin/vite.js'
     tts_python = ROOT / 'backend/.tts-venv/Scripts/python.exe'
-    tts_installed = (ROOT / 'backend/.tts-venv/Lib/site-packages/qwen_tts/__init__.py').exists()
+    tts_installed = '--local-tts' in sys.argv and (ROOT / 'backend/.tts-venv/Lib/site-packages/qwen_tts/__init__.py').exists()
+    os.environ['PATROL_LOCAL_TTS'] = '1' if tts_installed else '0'
     for path in (python, Path(node), vite):
         if not path.is_file():
             raise RuntimeError(f'실행 파일이 없습니다: {path}\nREADME.md의 설치 안내를 확인해 주세요.')
@@ -123,7 +124,7 @@ def main():
         if tts_installed:
             processes.append(launch(job, '음성', [str(tts_python), '-m', 'uvicorn', 'tts.worker:app', '--host', '127.0.0.1', '--port', '8001'], ROOT / 'backend'))
         else:
-            print('[음성] 로컬 TTS 환경이 없습니다. backend/requirements-tts.txt 설치 안내를 확인하세요.', flush=True)
+            print('[음성] 브라우저 기본 한국어 TTS 사용 · 음성 모델 서버는 실행하지 않습니다.', flush=True)
         tunnel_exe = ROOT / '.tools/cloudflared.exe'
         tunnel_config = ROOT / 'cloudflare.yml'
         if (ROOT / '.tools/tunnel-enabled').exists() and tunnel_exe.exists() and tunnel_config.exists() and (ROOT / '.tools/safety-map.json').exists():

@@ -1,4 +1,5 @@
 import { logout } from './accessClient';
+import { bindMapLongPress } from './mapLongPress';
 import type { MapInstance, Marker, Polyline } from './naverTypes';
 import type { Coordinates, LocationSource, Notification, Place, Icon } from './types';
 import { loadMap } from './naverMap';
@@ -13,7 +14,7 @@ import { PatrolTrack } from './patrolTrack';
 import { api } from './api';
 import { putPlaceOverlays } from './ManagedMap';
 import usePatrolServer from './usePatrolServer';
-import { ServerSpeech } from './serverSpeech';
+import { BrowserSpeech } from './browserSpeech';
 import useHeading from './useHeading';
 import { navigationIcon, normalizeHeading } from './heading';
 
@@ -35,10 +36,13 @@ export default function PatrolPage({ officerId }: {officerId: number}) {
   const [position, setPosition] = useState(STATION);
   const [following, setFollowing] = useState(true);
   const [locationMode, setLocationMode] = useState<LocationSource>('gps');
-  const direction = useHeading(locationMode);
   const [locationMessage, setLocationMessage] = useState('현재 위치를 확인하고 있습니다. 위치 권한을 허용해 주세요.');
   const [menu, setMenu] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [longPressMove, setLongPressMove] = useState(()=>{try{return localStorage.getItem('patrol-long-press-move')==='true';}catch{return false;}});
+  const longPressMode = useRef(longPressMove);
+  longPressMode.current = longPressMove;
+  const direction = useHeading(locationMode, longPressMove);
   const [showZones, setShowZones] = useState(()=>savedToggle('patrol-show-zones'));
   const settingsPanel = useRef<HTMLElement>(null), settingsButton = useRef<HTMLButtonElement>(null);
   useEffect(()=>{
@@ -82,19 +86,19 @@ export default function PatrolPage({ officerId }: {officerId: number}) {
   const voiceReady = useRef(false), pendingSpeech = useRef<Notification[]>([]);
   const [voiceError, setVoiceError] = useState('');
   const voiceRef = useRef(voiceEnabled);
-  const speechPlayer = useRef<ServerSpeech | null>(null);
+  const speechPlayer = useRef<BrowserSpeech | null>(null);
   const restoredId = useRef<number | null>(null);
   const server = usePatrolServer(officerId, track, handleServerAlert);
 
   useEffect(() => {
     const value = Number.isFinite(direction.heading) ? normalizeHeading(direction.heading!) : null;
     const source = direction.source === '기기 방향' ? 'sensor' : direction.source === '데모 이동 방향' ? 'demo' : value === null ? 'unknown' : 'gps';
-    server.reportHeading(value, source);
-  }, [direction.heading, direction.source, server.reportHeading]);
+    server.reportHeading(value, source, direction.measuredAt);
+  }, [direction.heading, direction.source, direction.measuredAt, server.reportHeading]);
 
-  function handleServerAlert(item: Notification) {
+  function handleServerAlert(item: Notification, announce: boolean) {
     receiveNotification(item);
-    if (!item.read && voiceRef.current) {
+    if (announce && !item.read && voiceRef.current) {
       if (voiceReady.current) speechPlayer.current?.speak(item.body);
       else pendingSpeech.current = [...pendingSpeech.current.filter(a => a.id !== item.id), item].slice(-10);
     }
@@ -103,18 +107,18 @@ export default function PatrolPage({ officerId }: {officerId: number}) {
   function activateVoice() {
     if (!voiceRef.current || voiceReady.current) return;
     try {
-      speechPlayer.current ||= new ServerSpeech(() => setVoiceError('음성 안내를 재생하지 못했습니다. 알림 내용을 확인해 주세요.'));
+      speechPlayer.current ||= new BrowserSpeech(error => { voiceReady.current=false; setVoiceWaiting(true); setVoiceError(error.message); });
       const player = speechPlayer.current;
       player.enable().then(() => {
         if (speechPlayer.current !== player || !voiceRef.current || voiceReady.current) return;
-        voiceReady.current = true; setVoiceWaiting(false);
+        voiceReady.current = true; setVoiceWaiting(false); setVoiceError('');
         const pending = pendingSpeech.current; pendingSpeech.current = [];
         pending.forEach(item => player.speak(item.body));
       }).catch(() => { if (speechPlayer.current === player && voiceRef.current) setVoiceError('화면을 한 번 터치하면 음성 안내를 시작할 수 있습니다.'); });
     } catch { setVoiceError('이 브라우저에서 음성 재생을 사용할 수 없습니다.'); }
   }
 
-  useEffect(()=>{try{localStorage.setItem('patrol-voice-enabled',String(voiceEnabled));localStorage.setItem('patrol-show-zones',String(showZones));}catch{/* 저장 불가 환경에서는 현재 화면에만 적용 */}},[voiceEnabled,showZones]);
+  useEffect(()=>{try{localStorage.setItem('patrol-voice-enabled',String(voiceEnabled));localStorage.setItem('patrol-show-zones',String(showZones));localStorage.setItem('patrol-long-press-move',String(longPressMove));}catch{/* 저장 불가 환경에서는 현재 화면에만 적용 */}},[voiceEnabled,showZones,longPressMove]);
 
   function toggleVoice() {
     setVoiceError('');
@@ -126,10 +130,10 @@ export default function PatrolPage({ officerId }: {officerId: number}) {
 
   useEffect(() => {
     if (!voiceEnabled) return;
-    activateVoice();
     window.addEventListener('pointerup', activateVoice, true);
+    window.addEventListener('touchend', activateVoice, true);
     window.addEventListener('keydown', activateVoice, true);
-    return () => { window.removeEventListener('pointerup', activateVoice, true); window.removeEventListener('keydown', activateVoice, true); };
+    return () => { window.removeEventListener('pointerup', activateVoice, true); window.removeEventListener('touchend', activateVoice, true); window.removeEventListener('keydown', activateVoice, true); };
   }, [voiceEnabled]);
 
   useEffect(() => () => { speechPlayer.current?.dispose(); speechPlayer.current = null; voiceReady.current = false; }, []);
@@ -159,10 +163,10 @@ export default function PatrolPage({ officerId }: {officerId: number}) {
   }, [server.restore, mapState]);
 
   function changePosition(next: Coordinates, source: LocationSource = 'demo', time = Date.now(), accuracy = 0, headingData: {heading?: number | null; speed?: number | null} = {}) {
-    direction.positionChanged(latestPosition.current, next, { source, accuracy, ...headingData });
+    const orientation = direction.positionChanged(latestPosition.current, next, { source, accuracy, ...headingData });
     latestPosition.current = next;
     setPosition(next);
-    server.reportPosition(next, source, accuracy);
+    server.reportPosition(next, source, accuracy, orientation ?? null);
     if (track.current.record(next, source, time, accuracy) && routeLine.current) {
       routeLine.current.getPath().push(new window.naver.maps.LatLng(next.lat, next.lng));
     }
@@ -245,6 +249,24 @@ export default function PatrolPage({ officerId }: {officerId: number}) {
     if (arrow) arrow.style.transform = `rotate(${known ? direction.heading : 0}deg)`;
   }, [direction.heading, direction.source, mapState]);
 
+  function moveToMapPosition(next: Coordinates, message: string) {
+    gpsGeneration.current += 1;
+    if (gpsWatch.current !== null) navigator.geolocation.clearWatch(gpsWatch.current);
+    gpsWatch.current = null;
+    setFollowing(false); setLocationMode('demo'); setLocationMessage(message);
+    changePosition(next,'demo');
+  }
+
+  useEffect(()=>{
+    if(mapState!=='ready' || !longPressMove || !mapRef.current)return;
+    const map=mapRef.current, maps=window.naver.maps;
+    const element=canvas.current!;
+    return bindMapLongPress(element,map,maps,target=>{
+      moveToMapPosition(target,'길게 누른 위치로 데모 이동 · 위치 고정 해제');
+      navigator.vibrate?.(40);
+    });
+  },[mapState,longPressMove]);
+
   useEffect(() => {
     if (mapState !== 'ready') return;
     const map = mapRef.current;
@@ -255,14 +277,7 @@ export default function PatrolPage({ officerId }: {officerId: number}) {
       const coordinate = event.coord ?? event.latlng;
       if (!coordinate) return;
       pointer.preventDefault?.();
-      gpsGeneration.current += 1;
-      if (gpsWatch.current !== null) navigator.geolocation.clearWatch(gpsWatch.current);
-      gpsWatch.current = null;
-      const next = { lat: coordinate.lat(), lng: coordinate.lng() };
-      setFollowing(false);
-      setLocationMode('demo');
-      setLocationMessage('고정 해제 후 클릭한 위치로 이동 · 방향키 10m');
-      changePosition(next, 'demo');
+      moveToMapPosition({lat:coordinate.lat(),lng:coordinate.lng()}, '고정 해제 후 클릭한 위치로 이동 · 방향키 10m');
     }
     const listener = window.naver.maps.Event.addListener(map!, 'click', onShiftClick);
     return () => window.naver.maps.Event.removeListener(listener);
@@ -290,13 +305,19 @@ export default function PatrolPage({ officerId }: {officerId: number}) {
 
   useEffect(() => {
     if (!server.officer) return;
-    useGps();
+    if (longPressMove) {
+      gpsGeneration.current += 1;
+      if (gpsWatch.current !== null) navigator.geolocation.clearWatch(gpsWatch.current);
+      gpsWatch.current = null;
+      setLocationMode('demo');
+      setLocationMessage('꾹 눌러 이동 모드 · GPS 좌표 추적 중지 · 기기 방향 유지');
+    } else useGps();
     return () => {
       gpsGeneration.current += 1;
       if (gpsWatch.current !== null) navigator.geolocation.clearWatch(gpsWatch.current);
       gpsWatch.current = null;
     };
-  }, [server.officer?.id]);
+  }, [server.officer?.id, longPressMove]);
 
   function useDemo() {
     gpsGeneration.current += 1;
@@ -309,19 +330,24 @@ export default function PatrolPage({ officerId }: {officerId: number}) {
   }
 
   function useGps() {
+    // A menu action or a late geolocation callback must not override demo coordinates.
+    if (longPressMode.current) {
+      setLongPressMove(false);
+      return;
+    }
     if (!navigator.geolocation) { setLocationMode('demo'); setLocationMessage('위치 기능 미지원 · 부산진경찰서 기준 데모'); return; }
     const generation = ++gpsGeneration.current;
     if (gpsWatch.current !== null) navigator.geolocation.clearWatch(gpsWatch.current);
     setLocationMode('gps');
     setLocationMessage('위치 권한을 허용하면 실제 위치를 표시합니다.');
     gpsWatch.current = navigator.geolocation.watchPosition(({ coords }) => {
-      if (generation !== gpsGeneration.current) return;
+      if (generation !== gpsGeneration.current || longPressMode.current) return;
       const current = { lat: coords.latitude, lng: coords.longitude };
       demoOrigin.current = current;
       changePosition(current, 'gps', Date.now(), coords.accuracy, { heading: coords.heading, speed: coords.speed });
       setLocationMessage(`GPS 수신 · 정확도 약 ${Math.round(coords.accuracy)}m`);
     }, error => {
-      if (generation !== gpsGeneration.current) return;
+      if (generation !== gpsGeneration.current || longPressMode.current) return;
       if (gpsWatch.current !== null) navigator.geolocation.clearWatch(gpsWatch.current);
       gpsWatch.current = null;
       setLocationMode('demo');
@@ -363,7 +389,7 @@ export default function PatrolPage({ officerId }: {officerId: number}) {
 
   return (
     <div className="patrol-screen">
-      <div className="map-canvas" ref={canvas} aria-label="사용자 현재 위치 기반 네이버 지도" />
+      <div className={`map-canvas${longPressMove ? ' long-press-enabled' : ''}`} ref={canvas} aria-label="사용자 현재 위치 기반 네이버 지도" />
       {mapState === 'ready' && <div className="map-tools map-float" aria-label="지도 조작">
         <button aria-label="지도 확대" onClick={() => mapRef.current?.setZoom(mapRef.current!.getZoom() + 1, false)}>+</button>
         <button aria-label="지도 축소" onClick={() => mapRef.current?.setZoom(mapRef.current!.getZoom() - 1, false)}>−</button>
@@ -382,7 +408,7 @@ export default function PatrolPage({ officerId }: {officerId: number}) {
       {menu && <><button className="menu-scrim" aria-label="메뉴 닫기" onClick={() => setMenu(false)} /><nav id="patrol-menu" className="patrol-menu map-float" aria-label="순찰 메뉴"><p>SMART PATROL</p><h2>순찰자 메뉴</h2><button onClick={()=>logout().catch(e=>server.setError(e.message))}>접속 종료</button><button onClick={() => { setFollowing(false); mapRef.current?.setCenter(new window.naver.maps.LatLng(STATION.lat, STATION.lng)); setMenu(false); }}>부산진경찰서로 이동</button><button onClick={() => { useDemo(); setMenu(false); }}>데모 위치 초기화</button><button onClick={() => { useGps(); setMenu(false); }}>실제 GPS 위치 사용</button><small>화살표: {direction.source}{Number.isFinite(direction.heading) ? ` · ${Math.round(normalizeHeading(direction.heading!))}°` : ' · 방향 정보 대기'}</small><small>위치·경로는 서버로 전송됩니다.</small></nav></>}
 
       <button ref={settingsButton} className="patrol-settings-button map-float" aria-label="설정 열기" aria-expanded={settingsOpen} aria-controls="patrol-settings" onClick={()=>{setSettingsOpen(value=>!value);setNotificationsOpen(false);setMenu(false);}}><svg viewBox="0 0 24 24" width="25" height="25" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9.5 3h5l.5 2.4 1.5.9 2.3-.8 2.5 4.3-1.8 1.7v1.7l1.8 1.7-2.5 4.3-2.3-.8-1.5.9-.5 2.4h-5L9 19.3l-1.5-.9-2.3.8-2.5-4.3 1.8-1.7v-1.7L2.7 9.8l2.5-4.3 2.3.8L9 5.4Z"/><circle cx="12" cy="12.3" r="3.1"/></svg></button>
-      {settingsOpen && <section ref={settingsPanel} id="patrol-settings" className="patrol-settings-panel map-float" role="dialog" aria-label="순찰 설정"><header><h2>설정</h2><button aria-label="설정 닫기" onClick={()=>{setSettingsOpen(false);settingsButton.current?.focus();}}>×</button></header><div className="patrol-setting-row"><div><strong>음성 안내</strong><small>알림 내용을 음성으로 안내합니다.</small></div><button className="patrol-setting-switch" role="switch" aria-label="음성 안내" aria-checked={voiceEnabled} onClick={toggleVoice}><span/></button></div><div className="patrol-setting-row"><div><strong>범죄예방구역 표시</strong><small>강화구역의 원형 범위만 표시합니다.</small></div><button className="patrol-setting-switch" role="switch" aria-label="범죄예방구역 표시" aria-checked={showZones} onClick={()=>setShowZones(value=>!value)}><span/></button></div><p>원형 범위를 꺼도 지점 아이콘과 진입 알림은 유지됩니다.</p></section>}
+      {settingsOpen && <section ref={settingsPanel} id="patrol-settings" className="patrol-settings-panel map-float" role="dialog" aria-label="순찰 설정"><header><h2>설정</h2><button aria-label="설정 닫기" onClick={()=>{setSettingsOpen(false);settingsButton.current?.focus();}}>×</button></header><div className="patrol-setting-row"><div><strong>음성 안내</strong><small>알림 내용을 음성으로 안내합니다.</small></div><button className="patrol-setting-switch" role="switch" aria-label="음성 안내" aria-checked={voiceEnabled} onClick={toggleVoice}><span/></button></div><div className="patrol-setting-row"><div><strong>범죄예방구역 표시</strong><small>강화구역의 원형 범위만 표시합니다.</small></div><button className="patrol-setting-switch" role="switch" aria-label="범죄예방구역 표시" aria-checked={showZones} onClick={()=>setShowZones(value=>!value)}><span/></button></div><div className="patrol-setting-row"><div><strong>꾹 눌러 위치 이동</strong><small>GPS 좌표 추적을 멈추고 방향 센서는 유지합니다.<br/>1초간 눌러 이동 · 끄면 실제 GPS로 복귀합니다.</small></div><button className="patrol-setting-switch" role="switch" aria-label="꾹 눌러 위치 이동" aria-checked={longPressMove} onClick={()=>setLongPressMove(value=>!value)}><span/></button></div><p>원형 범위를 꺼도 지점 아이콘과 진입 알림은 유지됩니다.</p></section>}
       <button className="notification-toggle map-float" aria-label={notificationsOpen?'알림 접기':'알림 열기'} aria-expanded={notificationsOpen} aria-controls="patrol-notifications" onClick={() => {setSettingsOpen(false);setNotificationsOpen(value=>!value);}}><img src="/icons/notification-bell.png" alt="" />{unreadCount > 0 && <span>{unreadCount}</span>}</button>{notificationsOpen && <section id="patrol-notifications" className="notification-panel map-float" aria-label="순찰 알림" style={{ height: notificationHeight }}><div className="notification-heading"><h2><img className="notification-bell-icon" src="/icons/notification-bell.png" alt="" aria-hidden="true" /> 순찰 알림</h2><div className="notification-heading-actions"><span className="notification-count">{unreadCount}</span><button aria-label="알림 접기" aria-expanded={true} aria-controls="patrol-notifications" onClick={() => setNotificationsOpen(false)}>×</button></div></div><p className="notification-subtitle">순찰 중 확인할 소식을 모아봅니다</p><div className="notification-list" aria-live="polite">{notifications.length === 0 && <p className="notification-empty">받은 알림이 없습니다.</p>}{notifications.map(item => <NotificationCard key={item.id} item={item} onRead={readNotification} />)}</div><div className="notification-resize-handle" role="separator" aria-label="알림창 높이 조절" aria-orientation="horizontal" aria-valuemin={240} aria-valuemax={900} aria-valuenow={notificationHeight} tabIndex={0} title="위아래로 드래그하여 높이 조절" onPointerDown={startNotificationResize} onPointerMove={event => { const start = notificationResize.current; if (start) resizeNotification(start.height + event.clientY - start.y); }} onPointerUp={() => { notificationResize.current = null; }} onPointerCancel={() => { notificationResize.current = null; }} onLostPointerCapture={() => { notificationResize.current = null; }} onKeyDown={event => { if (event.key === 'ArrowUp' || event.key === 'ArrowDown') { event.preventDefault(); event.stopPropagation(); resizeNotification(notificationHeight + (event.key === 'ArrowDown' ? 20 : -20)); } }}><span /></div></section>}
 
       <p className="sr-only" role="status">{locationMessage}</p>{server.error && <p className="server-sync-error" role="alert">{server.error}</p>}{voiceError && <p className="voice-playback-error map-float" role="alert">{voiceError}</p>}{voiceEnabled && voiceWaiting && <p className="voice-activation-hint map-float" role="status">화면을 한 번 터치하면 음성 안내가 시작됩니다.</p>}

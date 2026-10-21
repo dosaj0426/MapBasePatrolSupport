@@ -18,6 +18,6 @@ export interface RestoredPatrol extends Patrol { points: RoutePoint[] }
 export interface Alert { id: number; officer_id: number; type: AlertType; title: string; body: string; created_at: string; read: boolean }
 export interface Notification { id: string | number; serverId?: number; type: AlertType; title: string; body: string; read?: boolean; time: string }
 export interface HeadingSample { heading: number | null; source: HeadingSource; measured_at: string }
-export interface PositionSample extends Coordinates { source: LocationSource; accuracy: number; measured_at: string }
+export interface PositionSample extends Coordinates { orientation?: HeadingSample | null; source: LocationSource; accuracy: number; measured_at: string }
 
 export interface InspectionRecord { patrol_id: number; officer_name: string; started_at: string; ended_at: string; source: LocationSource; entry_count: number; dwell_seconds: number; first_entry_at: string | null; last_entry_at: string | null; legacy: boolean }

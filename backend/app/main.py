@@ -1,7 +1,7 @@
 """로컬 시제품 API. 경로는 역할 구분이며 실제 인증은 별도 도입이 필요하다."""
 import io
 import csv
-from threading import Lock
+from threading import Lock, Thread, Event
 from concurrent.futures import ThreadPoolExecutor
 import os
 import asyncio
@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field, ConfigDict, AwareDatetime
 from sqlalchemy import select, delete
 from .store import Session, init, row, now, Officer, Icon, Place, Patrol, Point, ZoneState, Alert, UPLOADS, PlaceImport
-from .geo import distance, zone_transition
+from .geo import distance, zone_transition, relative_side, zone_message
 from .access import install_access, authenticate, COOKIE
 from .patrol_results import summarize
 from .place_csv import parse_csv, row_payload
@@ -28,8 +28,20 @@ from tts.common import CACHE as TTS_CACHE, MODEL_ID as TTS_MODEL, SPEAKER as TTS
 @asynccontextmanager
 async def lifespan(app):
     init()
-    yield
+    stop = Event()
+    def warm_existing():
+        with Session() as db:
+            places = list(db.scalars(select(Place).where(Place.enhanced.is_(True))))
+        for place in places:
+            if stop.is_set(): break
+            prepare_speech(place, stop)
+    if LOCAL_TTS_ENABLED: Thread(target=warm_existing, name='zone-voice-cache', daemon=True).start()
+    try:
+        yield
+    finally:
+        stop.set()
 
+LOCAL_TTS_ENABLED = os.getenv('PATROL_LOCAL_TTS','0') == '1'
 CSV_COMMIT_LOCK = Lock()
 
 app = FastAPI(title='스마트 순찰 관리 API', version='0.2.0', lifespan=lifespan)
@@ -47,6 +59,7 @@ class SpeechInput(Model):
 
 @app.get('/api/tts/status')
 def tts_status():
+    if not LOCAL_TTS_ENABLED: return {'available': False, 'engine': 'browser-speech-synthesis', 'mode': 'browser'}
     try:
         response = httpx.get('http://127.0.0.1:8001/health', timeout=2)
         response.raise_for_status()
@@ -56,6 +69,7 @@ def tts_status():
 
 @app.post('/api/tts/synthesize')
 def tts_synthesize(data: SpeechInput):
+    if not LOCAL_TTS_ENABLED: raise HTTPException(503, '데모는 브라우저 기본 TTS를 사용합니다.')
     text = normalize(data.text)
     if not text: raise HTTPException(422, '안내 문구를 입력해 주세요.')
     key = audio_key(text)
@@ -76,17 +90,18 @@ def tts_audio(key: str):
     if not path.is_file(): raise HTTPException(404, '음성 파일이 없습니다.')
     return FileResponse(path, media_type='audio/wav', headers={'Cache-Control': 'private, max-age=86400'})
 
+class HeadingInput(Model):
+    heading: float | None = Field(default=None, ge=0, lt=360)
+    source: Literal['sensor', 'gps', 'demo', 'unknown']
+    measured_at: AwareDatetime
+
 class PositionInput(Model):
     lat: float = Field(ge=-90, le=90)
     lng: float = Field(ge=-180, le=180)
     source: Literal['gps', 'demo'] = 'demo'
     accuracy: float = Field(default=0, ge=0, le=100000)
     measured_at: AwareDatetime
-
-class HeadingInput(Model):
-    heading: float | None = Field(default=None, ge=0, lt=360)
-    source: Literal['sensor', 'gps', 'demo', 'unknown']
-    measured_at: AwareDatetime
+    orientation: HeadingInput | None = None
 
 class RoutePoint(PositionInput):
     sequence: int = Field(ge=0)
@@ -214,7 +229,19 @@ def location(officer_id: int, data: PositionInput):
             if state.revision != place.revision: state.revision, state.armed = place.revision, True
             state.armed, entered = zone_transition(state.armed, distance((data.lat, data.lng), (place.lat, place.lng)), place.radius, place.multiplier)
             if entered:
-                db.add(Alert(officer_id=officer_id, type=place.alert_type, title=f'{place.name} 강화구역 진입', body=('[데모] ' if data.source == 'demo' else '') + (place.message or f'{place.name} 범죄예방 강화구역입니다. 주변을 확인해 주세요.')))
+                sample=data.orientation
+                # Embedded orientation belongs to this location sample, avoiding queued-position/new-heading races.
+                if sample:
+                    heading, heading_source, measured = sample.heading,sample.source,sample.measured_at
+                else:
+                    heading, heading_source = item.heading,item.heading_source
+                    measured = datetime.fromisoformat(item.heading_updated_at) if item.heading_updated_at else None
+                compatible = heading_source in ('sensor','gps') if data.source=='gps' else heading_source in ('sensor','demo')
+                fresh = measured is not None and -1 <= (data.measured_at-measured).total_seconds() <= 10
+                minimum=max(3,data.accuracy) if data.source=='gps' else 3
+                side=relative_side((data.lat,data.lng),(place.lat,place.lng),heading,minimum) if compatible and fresh else None
+                body=('[데모] ' if data.source=='demo' else '')+zone_message(place.name,place.message,side)
+                db.add(Alert(officer_id=officer_id, type=place.alert_type, title=f'{place.name} 강화구역 진입', body=body))
         return {'accepted': True}
 
 @app.get('/api/icons')
@@ -260,23 +287,36 @@ def save_place(db, data, item=None):
 @app.post('/api/places', status_code=201)
 def add_place(data: PlaceInput, background: BackgroundTasks):
     with Session.begin() as db: result = save_place(db, data)
-    if data.enhanced: background.add_task(prepare_speech, data)
+    if LOCAL_TTS_ENABLED and data.enhanced: background.add_task(prepare_speech, data)
     return result
 
 @app.put('/api/places/{place_id}')
 def edit_place(place_id: int, data: PlaceInput, background: BackgroundTasks):
     with Session.begin() as db: result = save_place(db, data, get_or_404(db, Place, place_id))
-    if data.enhanced: background.add_task(prepare_speech, data)
+    if LOCAL_TTS_ENABLED and data.enhanced: background.add_task(prepare_speech, data)
     return result
 
-def prepare_speech(data):
-    text = data.message or f'{data.name} 범죄예방 강화구역입니다. 주변을 확인해 주세요.'
-    if (TTS_CACHE / (audio_key(text) + '.wav')).exists(): return
-    try:
-        response = httpx.post('http://127.0.0.1:8001/synthesize', json={'text': text}, timeout=httpx.Timeout(300, connect=1))
-        response.raise_for_status()
-    except httpx.HTTPError:
-        print('강화구역 음성 사전 생성 실패: 관리자 미리듣기에서 재시도하세요.', flush=True)
+def prepare_speech(data, stop=None):
+    if not LOCAL_TTS_ENABLED: return
+    # Cache the exact phrases sent in alerts, including directional introductions.
+    for text in dict.fromkeys(zone_message(data.name,data.message,side) for side in ('전방','좌측','우측','후방',None)):
+        if stop is not None and stop.is_set(): return
+        if (TTS_CACHE / (audio_key(text) + '.wav')).exists(): continue
+        for attempt in range(3):
+            try:
+                response = httpx.post('http://127.0.0.1:8001/synthesize', json={'text': text}, timeout=httpx.Timeout(300, connect=2))
+                response.raise_for_status()
+                print('강화구역 방향 음성 사전 생성 완료', flush=True)
+                break
+            except httpx.HTTPError:
+                # The speech worker can still be starting when the API starts.
+                if attempt == 2:
+                    print('강화구역 음성 사전 생성 실패: 다음 서버 시작 또는 지점 저장 시 재시도합니다.', flush=True)
+                elif stop is not None:
+                    if stop.wait(3): return
+                else:
+                    import time
+                    time.sleep(3)
 
 @app.delete('/api/places/{place_id}')
 def delete_place(place_id: int):
@@ -359,7 +399,7 @@ def commit_place_csv(batch_id: str, background: BackgroundTasks):
         for entry in rows:
             data=PlaceInput(**entry['data'])
             item=save_place(db,data); ids.append(item['id'])
-            if data.enhanced: background.add_task(prepare_speech,data)
+            if LOCAL_TTS_ENABLED and data.enhanced: background.add_task(prepare_speech,data)
         result={'count':len(ids),'ids':ids}
         batch.committed_json=json.dumps(result)
         return result
@@ -437,7 +477,7 @@ def save_points(officer_id: int, patrol_id: int, data: PointBatch):
                 continue
             if patrol.ended_at: raise HTTPException(409, '이미 종료된 순찰입니다.')
             if p.sequence != next_sequence: raise HTTPException(409, '좌표 순번이 누락되었습니다.')
-            values = p.model_dump(exclude={'accuracy'}); values['measured_at'] = p.measured_at.isoformat()
+            values = p.model_dump(exclude={'accuracy','orientation'}); values['measured_at'] = p.measured_at.isoformat()
             point = Point(patrol_id=patrol_id, **values); db.add(point); existing[p.sequence] = point; next_sequence += 1
         return {'last_sequence': next_sequence - 1}
 

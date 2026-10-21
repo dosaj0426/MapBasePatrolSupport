@@ -1,18 +1,19 @@
+import { AlertInbox } from './alertInbox';
 import type { RefObject } from 'react';
 import type { Officer, Coordinates, Notification, HeadingSample, HeadingSource, PositionSample, Patrol, PatrolDetail, RestoredPatrol, LocationSource, Alert } from './types';
 import type { PatrolTrack } from './patrolTrack';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, jsonBody } from './api';
 
-export default function usePatrolServer(officerId: number, track: RefObject<PatrolTrack>, onAlert: (item: Notification) => void) {
+export default function usePatrolServer(officerId: number, track: RefObject<PatrolTrack>, onAlert: (item: Notification, announce: boolean) => void) {
   const [officer, setOfficer] = useState<Officer | null>(null), [error, setError] = useState(''), [busy, setBusy] = useState(false);
   const remote = useRef<{id: number | null; ack: number; source: LocationSource; uploading: Promise<void> | null}>({ id: null, ack: -1, source: 'demo', uploading: null });
-  const live = useRef<PositionSample | null>(null), positionQueue = useRef<PositionSample[]>([]), alertCursor = useRef(0), alertHandler = useRef(onAlert);
+  const live = useRef<PositionSample | null>(null), positionQueue = useRef<PositionSample[]>([]), alertInbox = useRef(new AlertInbox()), alertHandler = useRef(onAlert);
   alertHandler.current = onAlert;
   const [restore, setRestore] = useState<RestoredPatrol | null>(null);
   const pendingHeading = useRef<HeadingSample | null>(null);
-  const reportHeading = useCallback((heading: number | null, source: HeadingSource) => {
-    pendingHeading.current = { heading, source, measured_at: new Date().toISOString() };
+  const reportHeading = useCallback((heading: number | null, source: HeadingSource, measuredAt: string | null) => {
+    pendingHeading.current = { heading, source, measured_at: measuredAt ?? new Date().toISOString() };
   }, []);
   useEffect(() => {
     if (!officer) return;
@@ -24,7 +25,7 @@ export default function usePatrolServer(officerId: number, track: RefObject<Patr
       if (last && !angleChanged && next.source === last.source && (next.heading === null) === (last.heading === null) && Date.now()-sentAt < 5000) return;
       sending = true;
       try {
-        const sample = { ...next, measured_at: new Date().toISOString() };
+        const sample = { ...next };
         await api(`/officers/${officerId}/heading`, { method: 'POST', body: jsonBody(sample) });
         last = next; sentAt = Date.now();
       } catch { if (!disposed) setError('방향 정보를 전송하지 못했습니다. 연결 후 자동 재시도합니다.'); }
@@ -54,8 +55,8 @@ export default function usePatrolServer(officerId: number, track: RefObject<Patr
     return () => { disposed = true; };
   }, [officerId]);
 
-  const reportPosition = useCallback((position: Coordinates, source: LocationSource, accuracy = 0) => {
-    const sample: PositionSample = { ...position, source: source === 'gps' ? 'gps' : 'demo', accuracy, measured_at: new Date().toISOString() };
+  const reportPosition = useCallback((position: Coordinates, source: LocationSource, accuracy = 0, orientation: HeadingSample | null = null) => {
+    const sample: PositionSample = { ...position, orientation, source: source === 'gps' ? 'gps' : 'demo', accuracy, measured_at: new Date().toISOString() };
     live.current = sample;
     positionQueue.current.push(sample);
     if (positionQueue.current.length > 1000) positionQueue.current.shift();
@@ -79,9 +80,19 @@ export default function usePatrolServer(officerId: number, track: RefObject<Patr
   useEffect(() => {
     if (!officer) return;
     let disposed = false, running = false;
+    async function receiveAlerts() {
+      const alerts = await api<Alert[]>(`/officers/${officerId}/alerts?after=${alertInbox.current.cursor}`);
+      if (disposed) return;
+      alertInbox.current.receive(alerts,(alert,announce)=>{
+        alertHandler.current({ ...alert, id: `server-${alert.id}`, serverId: alert.id, time: new Date(alert.created_at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }) },announce);
+      });
+    }
     async function tick() {
       if (running) return; running = true;
       try {
+        // Capture existing history before sending a position that could create a new alert.
+        if (!alertInbox.current.initialized) await receiveAlerts();
+        if (disposed) return;
         if (!positionQueue.current.length && live.current) positionQueue.current.push({ ...live.current, measured_at: new Date().toISOString() });
         while (positionQueue.current.length && !disposed) {
           const sample = positionQueue.current[0];
@@ -89,12 +100,7 @@ export default function usePatrolServer(officerId: number, track: RefObject<Patr
           positionQueue.current.shift();
         }
         await flushRoute();
-        const alerts = await api<Alert[]>(`/officers/${officerId}/alerts?after=${alertCursor.current}`);
-        for (const alert of alerts) {
-          if (disposed) break;
-          alertCursor.current = Math.max(alertCursor.current, alert.id);
-          alertHandler.current({ ...alert, id: `server-${alert.id}`, serverId: alert.id, time: new Date(alert.created_at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }) });
-        }
+        await receiveAlerts();
         if (!disposed) setError('');
       } catch(e) { if (!disposed) setError(`서버 연결: ${e.message} · 미전송 경로는 화면에 보관하고 재시도합니다.`); }
       finally { running = false; }
