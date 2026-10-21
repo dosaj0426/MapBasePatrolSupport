@@ -21,3 +21,7 @@ backend/data/
 *.db
 *.db-*
 *.sqlite*
+
+# Keep Markdown documentation local, except README files.
+*.[mM][dD]
+![rR][eE][aA][dD][mM][eE].[mM][dD]
