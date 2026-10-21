@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeHeading, turnTo, bearingBetween, compassHeading, navigationIcon } from './heading.js';
+import { normalizeHeading, turnTo, bearingBetween, compassHeading, navigationIcon } from './heading';
 const origin={lat:35.16,lng:129.05};
 test('동서남북 이동 방향을 계산한다',()=>{
-  for (const [point,expected] of [[{lat:35.17,lng:129.05},0],[{lat:35.16,lng:129.06},90],[{lat:35.15,lng:129.05},180],[{lat:35.16,lng:129.04},270]]) {
-    assert.ok(Math.abs(bearingBetween(origin,point)-expected)<.1);
+  for (const [point,expected] of [[{lat:35.17,lng:129.05},0],[{lat:35.16,lng:129.06},90],[{lat:35.15,lng:129.05},180],[{lat:35.16,lng:129.04},270]] as const) {
+    const bearing = bearingBetween(origin,point);
+    assert.notEqual(bearing,null);
+    assert.ok(Math.abs(bearing!-expected)<.1);
   }
 });
 test('정지하거나 GPS가 작게 흔들릴 때 방향을 새로 만들지 않는다',()=>{

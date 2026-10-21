@@ -4,7 +4,7 @@ export async function prepareMapTransport() {
   await navigator.serviceWorker.register('/map-transport.js', { scope: '/' });
   await navigator.serviceWorker.ready;
   if (navigator.serviceWorker.controller) return;
-  await new Promise((resolve, reject) => {
+  await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => { navigator.serviceWorker.removeEventListener('controllerchange', ready); reject(new Error('지도 연결 준비가 지연됩니다. 새로고침해 주세요.')); }, 5000);
     function ready() { clearTimeout(timer); resolve(); }
     navigator.serviceWorker.addEventListener('controllerchange', ready, { once: true });

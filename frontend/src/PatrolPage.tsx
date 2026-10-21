@@ -1,84 +1,98 @@
-import { loadMap } from './naverMap.js';
+import { logout } from './accessClient';
+import type { MapInstance, Marker, Polyline } from './naverTypes';
+import type { Coordinates, LocationSource, Notification, Place, Icon } from './types';
+import { loadMap } from './naverMap';
 import React, { useEffect, useRef, useState } from 'react';
 import './patrol.css';
 import './directionMarker.css';
 import './notificationCards.css';
-import { prepareMapTransport } from './mapTransport.js';
-import { moveTenMeters } from './location.js';
-import NotificationCard from './NotificationCard.jsx';
-import { PatrolTrack } from './patrolTrack.js';
-import { api } from './api.js';
-import { putPlaceOverlays } from './ManagedMap.jsx';
-import usePatrolServer from './usePatrolServer.js?v=heading-sync-2';
-import { ServerSpeech } from './serverSpeech.js';
-import useHeading from './useHeading.js';
-import { navigationIcon, normalizeHeading } from './heading.js';
+import { prepareMapTransport } from './mapTransport';
+import { moveTenMeters } from './location';
+import NotificationCard from './NotificationCard';
+import { PatrolTrack } from './patrolTrack';
+import { api } from './api';
+import { putPlaceOverlays } from './ManagedMap';
+import usePatrolServer from './usePatrolServer';
+import { ServerSpeech } from './serverSpeech';
+import useHeading from './useHeading';
+import { navigationIcon, normalizeHeading } from './heading';
 
 // 위치 권한 거부·수신 실패 시에만 사용하는 데모 기준점.
+const savedToggle = (key: string) => { try { return localStorage.getItem(key) !== 'false'; } catch { return true; } };
 const STATION = { lat: 35.1602002, lng: 129.054338 };
-export default function PatrolPage({ officerId }) {
-  const canvas = useRef(null);
-  const mapRef = useRef(null);
-  const userMarkerRef = useRef(null);
-  const gpsWatch = useRef(null);
+export default function PatrolPage({ officerId }: {officerId: number}) {
+  const canvas = useRef<HTMLDivElement>(null);
+  const mapRef = useRef<MapInstance | null>(null);
+  const userMarkerRef = useRef<Marker | null>(null);
+  const gpsWatch = useRef<number | null>(null);
   const gpsGeneration = useRef(0);
   const latestPosition = useRef(STATION);
   const demoOrigin = useRef(STATION);
   const track = useRef(new PatrolTrack());
-  const routeLine = useRef(null);
-  const routeStart = useRef(null);
-  const routeEnd = useRef(null);
+  const routeLine = useRef<Polyline | null>(null);
+  const routeStart = useRef<Marker | null>(null);
+  const routeEnd = useRef<Marker | null>(null);
   const [position, setPosition] = useState(STATION);
   const [following, setFollowing] = useState(true);
-  const [locationMode, setLocationMode] = useState('gps');
+  const [locationMode, setLocationMode] = useState<LocationSource>('gps');
   const direction = useHeading(locationMode);
   const [locationMessage, setLocationMessage] = useState('현재 위치를 확인하고 있습니다. 위치 권한을 허용해 주세요.');
   const [menu, setMenu] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [showZones, setShowZones] = useState(()=>savedToggle('patrol-show-zones'));
+  const settingsPanel = useRef<HTMLElement>(null), settingsButton = useRef<HTMLButtonElement>(null);
+  useEffect(()=>{
+    if(!settingsOpen)return;
+    function outside(event: PointerEvent){const target=event.target as Node; if(!settingsPanel.current?.contains(target) && !settingsButton.current?.contains(target))setSettingsOpen(false);}
+    function escape(event: KeyboardEvent){if(event.key==='Escape'){setSettingsOpen(false);settingsButton.current?.focus();}}
+    window.addEventListener('pointerdown',outside);window.addEventListener('keydown',escape);
+    return()=>{window.removeEventListener('pointerdown',outside);window.removeEventListener('keydown',escape);};
+  },[settingsOpen]);
   const [active, setActive] = useState(false);
-  const [started, setStarted] = useState(null);
+  const [started, setStarted] = useState<number | null>(null);
   const [elapsed, setElapsed] = useState(0);
   const [mapState, setMapState] = useState('loading');
   const [mapError, setMapError] = useState('');
   const [notificationHeight, setNotificationHeight] = useState(() => {
     try { const saved = Number(localStorage.getItem('patrol-notification-height')); return saved >= 240 && saved <= 900 ? saved : 340; } catch { return 340; }
   });
-  const notificationResize = useRef(null);
+  const notificationResize = useRef<{y: number; height: number} | null>(null);
   useEffect(() => {
     try { localStorage.setItem('patrol-notification-height', String(notificationHeight)); } catch { /* 저장 불가 환경에서도 크기 조절은 동작한다. */ }
   }, [notificationHeight]);
 
-  function resizeNotification(value) {
+  function resizeNotification(value: number) {
     const max = Math.max(240, Math.min(900, window.innerHeight - 200));
     setNotificationHeight(Math.round(Math.max(240, Math.min(max, value))));
   }
 
-  function startNotificationResize(event) {
+  function startNotificationResize(event: React.PointerEvent<HTMLDivElement>) {
     if (event.button !== 0) return;
-    const panel = event.currentTarget.closest('.notification-panel');
+    const panel = event.currentTarget.closest('.notification-panel')!;
     notificationResize.current = { y: event.clientY, height: panel.getBoundingClientRect().height };
     event.currentTarget.setPointerCapture(event.pointerId);
     event.preventDefault();
   }
-  const [notifications, setNotifications] = useState([]);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const unreadCount = notifications.filter(item => !item.read).length;
-  const [places, setPlaces] = useState([]), [placeIcons, setPlaceIcons] = useState([]);
-  const [voiceEnabled, setVoiceEnabled] = useState(true);
-  const [voiceWaiting, setVoiceWaiting] = useState(true);
-  const voiceReady = useRef(false), pendingSpeech = useRef([]);
+  const [places, setPlaces] = useState<Place[]>([]), [placeIcons, setPlaceIcons] = useState<Icon[]>([]);
+  const [voiceEnabled, setVoiceEnabled] = useState(()=>savedToggle('patrol-voice-enabled'));
+  const [voiceWaiting, setVoiceWaiting] = useState(voiceEnabled);
+  const voiceReady = useRef(false), pendingSpeech = useRef<Notification[]>([]);
   const [voiceError, setVoiceError] = useState('');
-  const voiceRef = useRef(true);
-  const speechPlayer = useRef(null);
-  const restoredId = useRef(null);
+  const voiceRef = useRef(voiceEnabled);
+  const speechPlayer = useRef<ServerSpeech | null>(null);
+  const restoredId = useRef<number | null>(null);
   const server = usePatrolServer(officerId, track, handleServerAlert);
 
   useEffect(() => {
-    const value = Number.isFinite(direction.heading) ? normalizeHeading(direction.heading) : null;
+    const value = Number.isFinite(direction.heading) ? normalizeHeading(direction.heading!) : null;
     const source = direction.source === '기기 방향' ? 'sensor' : direction.source === '데모 이동 방향' ? 'demo' : value === null ? 'unknown' : 'gps';
     server.reportHeading(value, source);
   }, [direction.heading, direction.source, server.reportHeading]);
 
-  function handleServerAlert(item) {
+  function handleServerAlert(item: Notification) {
     receiveNotification(item);
     if (!item.read && voiceRef.current) {
       if (voiceReady.current) speechPlayer.current?.speak(item.body);
@@ -99,6 +113,8 @@ export default function PatrolPage({ officerId }) {
       }).catch(() => { if (speechPlayer.current === player && voiceRef.current) setVoiceError('화면을 한 번 터치하면 음성 안내를 시작할 수 있습니다.'); });
     } catch { setVoiceError('이 브라우저에서 음성 재생을 사용할 수 없습니다.'); }
   }
+
+  useEffect(()=>{try{localStorage.setItem('patrol-voice-enabled',String(voiceEnabled));localStorage.setItem('patrol-show-zones',String(showZones));}catch{/* 저장 불가 환경에서는 현재 화면에만 적용 */}},[voiceEnabled,showZones]);
 
   function toggleVoice() {
     setVoiceError('');
@@ -126,7 +142,7 @@ export default function PatrolPage({ officerId }) {
     update(); const timer = setInterval(update, 5000);
     return () => { disposed = true; clearInterval(timer); };
   }, []);
-  useEffect(() => { if (mapState === 'ready') return putPlaceOverlays(mapRef.current, places, placeIcons); }, [mapState, places, placeIcons]);
+  useEffect(() => { if (mapState === 'ready') return putPlaceOverlays(mapRef.current!, places, placeIcons, undefined, showZones); }, [mapState, places, placeIcons, showZones]);
 
   useEffect(() => {
     if (!server.restore || mapState !== 'ready' || restoredId.current === server.restore.id) return;
@@ -142,7 +158,7 @@ export default function PatrolPage({ officerId }) {
     setLocationMessage('서버에서 진행 중인 순찰을 복원했습니다.');
   }, [server.restore, mapState]);
 
-  function changePosition(next, source = 'demo', time = Date.now(), accuracy = 0, headingData = {}) {
+  function changePosition(next: Coordinates, source: LocationSource = 'demo', time = Date.now(), accuracy = 0, headingData: {heading?: number | null; speed?: number | null} = {}) {
     direction.positionChanged(latestPosition.current, next, { source, accuracy, ...headingData });
     latestPosition.current = next;
     setPosition(next);
@@ -156,18 +172,18 @@ export default function PatrolPage({ officerId }) {
     for (const overlay of [routeLine, routeStart, routeEnd]) { overlay.current?.setMap(null); overlay.current = null; }
   }
 
-  function createRouteMarker(point, label, kind) {
+  function createRouteMarker(point: Coordinates, label: string, kind: string) {
     const maps = window.naver.maps;
     return new maps.Marker({ map: mapRef.current, position: new maps.LatLng(point.lat, point.lng), zIndex: 110, title: label, icon: { content: `<div class="route-endpoint ${kind}">${label}</div>`, anchor: new maps.Point(20, 14) } });
   }
 
   // 추후 관리자 수신 이벤트도 이 함수로 연결한다.
-  function receiveNotification(item) {
+  function receiveNotification(item: Notification) {
     setNotifications(items => [{ ...item, read: item.read ?? false }, ...items.filter(existing => existing.id !== item.id)]);
-    if (!item.read) setNotificationsOpen(true);
+    if (!item.read) { setSettingsOpen(false); setNotificationsOpen(true); }
   }
 
-  async function readNotification(id) {
+  async function readNotification(id: Notification['id']) {
     const target = notifications.find(item => item.id === id);
     if (target?.serverId) { try { await server.markRead(target.serverId); } catch(e) { server.setError(e.message); return; } }
     pendingSpeech.current = pendingSpeech.current.filter(item => item.id !== id);
@@ -180,16 +196,16 @@ export default function PatrolPage({ officerId }) {
     const key = import.meta.env.VITE_NAVER_MAP_KEY_ID;
     if (!key?.trim()) { setMapState('missing'); return; }
     let disposed = false;
-    let marker;
-    let map;
-    let resizeObserver;
+    let marker: Marker | undefined;
+    let map: MapInstance | undefined;
+    let resizeObserver: ResizeObserver | undefined;
     const timeout = setTimeout(() => { if (!disposed) { setMapError('지도 초기화가 지연되고 있습니다. API 인증과 네트워크를 확인해 주세요.'); setMapState('error'); } }, 18000);
     prepareMapTransport().then(() => loadMap(key.trim())).then(maps => {
       if (disposed) return;
-      let width = canvas.current.clientWidth;
-      let height = canvas.current.clientHeight;
+      let width = canvas.current!.clientWidth;
+      let height = canvas.current!.clientHeight;
       const initial = latestPosition.current;
-      map = new maps.Map(canvas.current, { center: new maps.LatLng(initial.lat, initial.lng), size: new maps.Size(width, height), zoom: 16, zoomControl: false, keyboardShortcuts: false, tileSpare: 0, tileTransition: false });
+      map = new maps.Map(canvas.current!, { center: new maps.LatLng(initial.lat, initial.lng), size: new maps.Size(width, height), zoom: 16, zoomControl: false, keyboardShortcuts: false, tileSpare: 0, tileTransition: false });
       maps.Event.addListener(map, 'dragstart', () => setFollowing(false));
       // SDK가 컨테이너 스타일을 갱신해도 실제 크기가 같으면 재렌더링하지 않는다.
       resizeObserver = new ResizeObserver(entries => {
@@ -198,9 +214,9 @@ export default function PatrolPage({ officerId }) {
         if (!nextWidth || !nextHeight || (nextWidth === width && nextHeight === height)) return;
         width = nextWidth;
         height = nextHeight;
-        map.setSize(new maps.Size(width, height));
+        map!.setSize(new maps.Size(width, height));
       });
-      resizeObserver.observe(canvas.current.parentElement);
+      resizeObserver.observe(canvas.current!.parentElement!);
       marker = new maps.Marker({ map, position: new maps.LatLng(STATION.lat, STATION.lng), title: '부산진경찰서', icon: { content: '<div class="station-pin">♜<span>부산진경찰서</span></div>', anchor: new maps.Point(22, 44) } });
       userMarkerRef.current = new maps.Marker({ map, position: new maps.LatLng(STATION.lat, STATION.lng), title: '내 위치', zIndex: 200, icon: { content: navigationIcon(null), anchor: new maps.Point(20, 20) } });
       mapRef.current = map;
@@ -224,15 +240,15 @@ export default function PatrolPage({ officerId }) {
     if (!pin) return;
     const known = Number.isFinite(direction.heading);
     pin.classList.toggle('heading-unknown', !known);
-    pin.setAttribute('aria-label', known ? `내 방향 ${Math.round(normalizeHeading(direction.heading))}도 · ${direction.source}` : '내 위치 · 방향 정보 대기');
-    const arrow = pin.querySelector('.user-heading-arrow');
+    pin.setAttribute('aria-label', known ? `내 방향 ${Math.round(normalizeHeading(direction.heading!))}도 · ${direction.source}` : '내 위치 · 방향 정보 대기');
+    const arrow = pin.querySelector<SVGElement>('.user-heading-arrow');
     if (arrow) arrow.style.transform = `rotate(${known ? direction.heading : 0}deg)`;
   }, [direction.heading, direction.source, mapState]);
 
   useEffect(() => {
     if (mapState !== 'ready') return;
     const map = mapRef.current;
-    function onShiftClick(event) {
+    function onShiftClick(event: {pointerEvent?: MouseEvent & {originalEvent?: MouseEvent}; coord?: {lat: () => number; lng: () => number}; latlng?: {lat: () => number; lng: () => number}}) {
       const pointer = event.pointerEvent?.originalEvent ?? event.pointerEvent;
       if (!pointer?.shiftKey || (pointer.button !== undefined && pointer.button !== 0)) return;
       // SDK가 현재 줌·패닝·투영을 반영해 계산한 좌표를 그대로 사용한다.
@@ -248,14 +264,14 @@ export default function PatrolPage({ officerId }) {
       setLocationMessage('고정 해제 후 클릭한 위치로 이동 · 방향키 10m');
       changePosition(next, 'demo');
     }
-    const listener = window.naver.maps.Event.addListener(map, 'click', onShiftClick);
+    const listener = window.naver.maps.Event.addListener(map!, 'click', onShiftClick);
     return () => window.naver.maps.Event.removeListener(listener);
   }, [mapState]);
 
   useEffect(() => {
-    function onKey(event) {
+    function onKey(event: KeyboardEvent) {
       if (mapState !== 'ready' || event.altKey || event.ctrlKey || event.metaKey || event.repeat) return;
-      if (event.target.closest?.('input, textarea, select, [contenteditable="true"], [role="textbox"], [role="dialog"]')) return;
+      if ((event.target as Element | null)?.closest?.('input, textarea, select, [contenteditable="true"], [role="textbox"], [role="dialog"]')) return;
       if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) return;
       event.preventDefault();
       // 방향키 데모는 마지막 실제 위치에서 시작하며 GPS가 좌표를 덮어쓰지 않는다.
@@ -316,7 +332,7 @@ export default function PatrolPage({ officerId }) {
 
   useEffect(() => {
     if (!active) return;
-    const timer = setInterval(() => setElapsed(Math.floor((Date.now() - started) / 1000)), 1000);
+    const timer = setInterval(() => setElapsed(Math.floor((Date.now() - (started ?? Date.now())) / 1000)), 1000);
     return () => clearInterval(timer);
   }, [active, started]);
 
@@ -335,8 +351,8 @@ export default function PatrolPage({ officerId }) {
     } else {
       track.current.stop();
       try { await server.end(); } catch(e) { track.current.active = true; server.setError(`종료 전송 대기: ${e.message}`); return; }
-      setElapsed(Math.floor((Date.now() - started) / 1000));
-      routeEnd.current = createRouteMarker(track.current.points.at(-1), '종료', 'end');
+      setElapsed(Math.floor((Date.now() - (started ?? Date.now())) / 1000));
+      routeEnd.current = createRouteMarker(track.current.points.at(-1)!, '종료', 'end');
     }
     setActive(next);
     receiveNotification({ id: Date.now(), type: 'info', title: next ? '순찰을 시작했습니다' : '순찰을 종료했습니다', body: next ? '이동 경로를 기록하고 5초마다 서버로 전송합니다. 데모 이동도 구분하여 저장합니다.' : `경로 ${track.current.points.length}개 지점을 서버에 저장했습니다. 관리자에서 확인할 수 있습니다.`, time: new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }) });
@@ -349,8 +365,8 @@ export default function PatrolPage({ officerId }) {
     <div className="patrol-screen">
       <div className="map-canvas" ref={canvas} aria-label="사용자 현재 위치 기반 네이버 지도" />
       {mapState === 'ready' && <div className="map-tools map-float" aria-label="지도 조작">
-        <button aria-label="지도 확대" onClick={() => mapRef.current?.setZoom(mapRef.current.getZoom() + 1, false)}>+</button>
-        <button aria-label="지도 축소" onClick={() => mapRef.current?.setZoom(mapRef.current.getZoom() - 1, false)}>−</button>
+        <button aria-label="지도 확대" onClick={() => mapRef.current?.setZoom(mapRef.current!.getZoom() + 1, false)}>+</button>
+        <button aria-label="지도 축소" onClick={() => mapRef.current?.setZoom(mapRef.current!.getZoom() - 1, false)}>−</button>
         <button aria-label="지도 다시 불러오기" title="지도 다시 불러오기" onClick={() => mapRef.current?.refresh(true)}>↻</button>
         <button aria-label={following ? '내 위치 고정 해제' : '내 위치로 고정'} title={following ? '내 위치 고정 중 · 클릭하여 해제' : '내 위치로 이동하고 고정'} aria-pressed={following} className={`follow-icon-button ${following ? 'is-following' : ''}`} onClick={() => setFollowing(value => !value)}>
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="8.25" stroke="currentColor" strokeWidth="1.25"/><path d="M12 1.75v4M12 18.25v4M1.75 12h4M18.25 12h4" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round"/><circle cx="12" cy="12" r="1.4" fill="currentColor"/></svg>
@@ -362,13 +378,15 @@ export default function PatrolPage({ officerId }) {
         <div className="map-config" role="status"><strong>{mapState === 'loading' ? '네이버 지도를 불러오는 중…' : mapState === 'missing' ? '네이버 지도 API 키가 필요합니다' : '지도 연결을 확인해 주세요'}</strong><p>{mapState === 'missing' ? '현재 배경은 UI 배치 확인용이며 실제 지도가 아닙니다.' : mapError}</p>{mapState === 'missing' && <small>frontend/.env에 VITE_NAVER_MAP_KEY_ID 설정 후 개발 서버를 재시작하세요.</small>}<a href="https://map.naver.com/p/search/부산진경찰서" target="_blank" rel="noreferrer">네이버 지도에서 위치 확인 ↗</a></div>
       </div>}
 
-      <div className="top-left-controls"><button className="menu-toggle map-float" aria-label={menu ? '메뉴 닫기' : '메뉴 열기'} aria-expanded={menu} aria-controls="patrol-menu" onClick={() => setMenu(!menu)}><span /><span /><span /></button><div className="workspace-chip map-float"><span className="live-dot" />SMART PATROL<span className="chip-divider" />{server.officer?.name || '순찰자 확인 중'}</div></div>
-      {menu && <><button className="menu-scrim" aria-label="메뉴 닫기" onClick={() => setMenu(false)} /><nav id="patrol-menu" className="patrol-menu map-float" aria-label="순찰 메뉴"><p>SMART PATROL</p><h2>순찰자 메뉴</h2><button onClick={() => { setFollowing(false); mapRef.current?.setCenter(new window.naver.maps.LatLng(STATION.lat, STATION.lng)); setMenu(false); }}>부산진경찰서로 이동</button><button onClick={() => { useDemo(); setMenu(false); }}>데모 위치 초기화</button><button onClick={() => { useGps(); setMenu(false); }}>실제 GPS 위치 사용</button><small>화살표: {direction.source}{Number.isFinite(direction.heading) ? ` · ${Math.round(normalizeHeading(direction.heading))}°` : ' · 방향 정보 대기'}</small><button onClick={toggleVoice}>{voiceEnabled ? '음성 안내 끄기' : '음성 안내 켜기'}</button><a href="/user">순찰자 선택</a><a href="/">화면 선택</a><a href="/admin">관리자 화면</a><small>위치·경로는 서버로 전송됩니다.</small></nav></>}
+      <div className="top-left-controls"><button className="menu-toggle map-float" aria-label={menu ? '메뉴 닫기' : '메뉴 열기'} aria-expanded={menu} aria-controls="patrol-menu" onClick={() => {setMenu(!menu);setSettingsOpen(false);}}><span /><span /><span /></button><div className="workspace-chip map-float"><span className="live-dot" />SMART PATROL<span className="chip-divider" />{server.officer?.name || '순찰자 확인 중'}</div></div>
+      {menu && <><button className="menu-scrim" aria-label="메뉴 닫기" onClick={() => setMenu(false)} /><nav id="patrol-menu" className="patrol-menu map-float" aria-label="순찰 메뉴"><p>SMART PATROL</p><h2>순찰자 메뉴</h2><button onClick={()=>logout().catch(e=>server.setError(e.message))}>접속 종료</button><button onClick={() => { setFollowing(false); mapRef.current?.setCenter(new window.naver.maps.LatLng(STATION.lat, STATION.lng)); setMenu(false); }}>부산진경찰서로 이동</button><button onClick={() => { useDemo(); setMenu(false); }}>데모 위치 초기화</button><button onClick={() => { useGps(); setMenu(false); }}>실제 GPS 위치 사용</button><small>화살표: {direction.source}{Number.isFinite(direction.heading) ? ` · ${Math.round(normalizeHeading(direction.heading!))}°` : ' · 방향 정보 대기'}</small><small>위치·경로는 서버로 전송됩니다.</small></nav></>}
 
-      {!notificationsOpen && <button className="notification-toggle map-float" aria-label="알림 열기" aria-expanded={false} aria-controls="patrol-notifications" onClick={() => setNotificationsOpen(true)}><img src="/icons/notification-bell.png" alt="" />{unreadCount > 0 && <span>{unreadCount}</span>}</button>}{notificationsOpen && <section id="patrol-notifications" className="notification-panel map-float" aria-label="순찰 알림" style={{ height: notificationHeight }}><div className="notification-heading"><h2><img className="notification-bell-icon" src="/icons/notification-bell.png" alt="" aria-hidden="true" /> 순찰 알림</h2><div className="notification-heading-actions"><span className="notification-count">{unreadCount}</span><button aria-label="알림 접기" aria-expanded={true} aria-controls="patrol-notifications" onClick={() => setNotificationsOpen(false)}>×</button></div></div><p className="notification-subtitle">순찰 중 확인할 소식을 모아봅니다</p><div className="notification-list" aria-live="polite">{notifications.length === 0 && <p className="notification-empty">받은 알림이 없습니다.</p>}{notifications.map(item => <NotificationCard key={item.id} item={item} onRead={readNotification} />)}</div><div className="notification-resize-handle" role="separator" aria-label="알림창 높이 조절" aria-orientation="horizontal" aria-valuemin={240} aria-valuemax={900} aria-valuenow={notificationHeight} tabIndex={0} title="위아래로 드래그하여 높이 조절" onPointerDown={startNotificationResize} onPointerMove={event => { const start = notificationResize.current; if (start) resizeNotification(start.height + event.clientY - start.y); }} onPointerUp={() => { notificationResize.current = null; }} onPointerCancel={() => { notificationResize.current = null; }} onLostPointerCapture={() => { notificationResize.current = null; }} onKeyDown={event => { if (event.key === 'ArrowUp' || event.key === 'ArrowDown') { event.preventDefault(); event.stopPropagation(); resizeNotification(notificationHeight + (event.key === 'ArrowDown' ? 20 : -20)); } }}><span /></div></section>}
+      <button ref={settingsButton} className="patrol-settings-button map-float" aria-label="설정 열기" aria-expanded={settingsOpen} aria-controls="patrol-settings" onClick={()=>{setSettingsOpen(value=>!value);setNotificationsOpen(false);setMenu(false);}}><svg viewBox="0 0 24 24" width="25" height="25" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9.5 3h5l.5 2.4 1.5.9 2.3-.8 2.5 4.3-1.8 1.7v1.7l1.8 1.7-2.5 4.3-2.3-.8-1.5.9-.5 2.4h-5L9 19.3l-1.5-.9-2.3.8-2.5-4.3 1.8-1.7v-1.7L2.7 9.8l2.5-4.3 2.3.8L9 5.4Z"/><circle cx="12" cy="12.3" r="3.1"/></svg></button>
+      {settingsOpen && <section ref={settingsPanel} id="patrol-settings" className="patrol-settings-panel map-float" role="dialog" aria-label="순찰 설정"><header><h2>설정</h2><button aria-label="설정 닫기" onClick={()=>{setSettingsOpen(false);settingsButton.current?.focus();}}>×</button></header><div className="patrol-setting-row"><div><strong>음성 안내</strong><small>알림 내용을 음성으로 안내합니다.</small></div><button className="patrol-setting-switch" role="switch" aria-label="음성 안내" aria-checked={voiceEnabled} onClick={toggleVoice}><span/></button></div><div className="patrol-setting-row"><div><strong>범죄예방구역 표시</strong><small>강화구역의 원형 범위만 표시합니다.</small></div><button className="patrol-setting-switch" role="switch" aria-label="범죄예방구역 표시" aria-checked={showZones} onClick={()=>setShowZones(value=>!value)}><span/></button></div><p>원형 범위를 꺼도 지점 아이콘과 진입 알림은 유지됩니다.</p></section>}
+      <button className="notification-toggle map-float" aria-label={notificationsOpen?'알림 접기':'알림 열기'} aria-expanded={notificationsOpen} aria-controls="patrol-notifications" onClick={() => {setSettingsOpen(false);setNotificationsOpen(value=>!value);}}><img src="/icons/notification-bell.png" alt="" />{unreadCount > 0 && <span>{unreadCount}</span>}</button>{notificationsOpen && <section id="patrol-notifications" className="notification-panel map-float" aria-label="순찰 알림" style={{ height: notificationHeight }}><div className="notification-heading"><h2><img className="notification-bell-icon" src="/icons/notification-bell.png" alt="" aria-hidden="true" /> 순찰 알림</h2><div className="notification-heading-actions"><span className="notification-count">{unreadCount}</span><button aria-label="알림 접기" aria-expanded={true} aria-controls="patrol-notifications" onClick={() => setNotificationsOpen(false)}>×</button></div></div><p className="notification-subtitle">순찰 중 확인할 소식을 모아봅니다</p><div className="notification-list" aria-live="polite">{notifications.length === 0 && <p className="notification-empty">받은 알림이 없습니다.</p>}{notifications.map(item => <NotificationCard key={item.id} item={item} onRead={readNotification} />)}</div><div className="notification-resize-handle" role="separator" aria-label="알림창 높이 조절" aria-orientation="horizontal" aria-valuemin={240} aria-valuemax={900} aria-valuenow={notificationHeight} tabIndex={0} title="위아래로 드래그하여 높이 조절" onPointerDown={startNotificationResize} onPointerMove={event => { const start = notificationResize.current; if (start) resizeNotification(start.height + event.clientY - start.y); }} onPointerUp={() => { notificationResize.current = null; }} onPointerCancel={() => { notificationResize.current = null; }} onLostPointerCapture={() => { notificationResize.current = null; }} onKeyDown={event => { if (event.key === 'ArrowUp' || event.key === 'ArrowDown') { event.preventDefault(); event.stopPropagation(); resizeNotification(notificationHeight + (event.key === 'ArrowDown' ? 20 : -20)); } }}><span /></div></section>}
 
-      <p className="sr-only" role="status">{locationMessage}</p>{server.error && <p className="server-sync-error" role="alert">{server.error}</p>}{voiceError && <p className="voice-playback-error map-float" role="alert">{voiceError}</p>}{voiceEnabled && voiceWaiting && <p className="voice-activation-hint map-float" role="status">화면을 한 번 터치하면 음성 안내가 시작됩니다.</p>}<button className="voice-toggle map-float" onClick={toggleVoice} aria-pressed={voiceEnabled}>{voiceEnabled ? '음성 안내 켜짐' : '음성 안내 켜기'}</button>
-      <div className="patrol-actions"><div className="patrol-status map-float"><span className={active ? 'live-dot' : 'idle-dot'} /><span>{active ? '순찰 중' : '순찰 대기'}</span><strong>{clock}</strong></div><button disabled={server.busy || !server.officer || mapState !== 'ready'} className={`patrol-control ${active ? 'stop' : ''}`} onClick={togglePatrol}><span className="control-symbol">{active ? '■' : '▶'}</span><span>{active ? '순찰 종료' : '순찰 시작'}<small>{active ? '진행 중인 순찰 마치기' : '안전한 순찰을 시작하세요'}</small></span><span className="control-arrow">→</span></button></div>
+      <p className="sr-only" role="status">{locationMessage}</p>{server.error && <p className="server-sync-error" role="alert">{server.error}</p>}{voiceError && <p className="voice-playback-error map-float" role="alert">{voiceError}</p>}{voiceEnabled && voiceWaiting && <p className="voice-activation-hint map-float" role="status">화면을 한 번 터치하면 음성 안내가 시작됩니다.</p>}
+      <div className="patrol-actions"><div className="patrol-status map-float"><span className={active ? 'live-dot' : 'idle-dot'} /><span>{active ? '순찰 중' : '순찰 대기'}</span><strong>{clock}</strong></div><button disabled={server.busy || !server.officer || mapState !== 'ready'} aria-busy={server.busy} className={`patrol-control ${active ? 'stop' : ''}`} onClick={togglePatrol}><svg className="control-symbol" viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="18" r="15" fill="none" stroke="currentColor" strokeWidth="2.2"/>{active ? <rect x="12" y="12" width="12" height="12" rx="1.5" fill="currentColor"/> : <path d="M15 11.5L25 18L15 24.5Z" fill="currentColor" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round"/>}</svg><span>{server.busy ? '처리 중…' : active ? '순찰 종료' : '순찰 시작'}</span></button></div>
     </div>
   );
 }

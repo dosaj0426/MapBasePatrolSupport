@@ -6,6 +6,6 @@ export const NOTIFICATION_TYPES = {
   emergency: { label: '긴급', accent: '#c93648', background: '#fff1f3', text: '#8f2736', badge: '#ffdae1' },
 };
 
-export function getNotificationType(type) {
-  return Object.hasOwn(NOTIFICATION_TYPES, type) ? NOTIFICATION_TYPES[type] : NOTIFICATION_TYPES.info;
+export function getNotificationType(type: string) {
+  return Object.hasOwn(NOTIFICATION_TYPES, type) ? NOTIFICATION_TYPES[type as keyof typeof NOTIFICATION_TYPES] : NOTIFICATION_TYPES.info;
 }

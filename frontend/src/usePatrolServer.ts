@@ -1,23 +1,26 @@
+import type { RefObject } from 'react';
+import type { Officer, Coordinates, Notification, HeadingSample, HeadingSource, PositionSample, Patrol, PatrolDetail, RestoredPatrol, LocationSource, Alert } from './types';
+import type { PatrolTrack } from './patrolTrack';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, jsonBody } from './api.js';
+import { api, jsonBody } from './api';
 
-export default function usePatrolServer(officerId, track, onAlert) {
-  const [officer, setOfficer] = useState(null), [error, setError] = useState(''), [busy, setBusy] = useState(false);
-  const remote = useRef({ id: null, ack: -1, source: 'demo', uploading: null });
-  const live = useRef(null), positionQueue = useRef([]), alertCursor = useRef(0), alertHandler = useRef(onAlert);
+export default function usePatrolServer(officerId: number, track: RefObject<PatrolTrack>, onAlert: (item: Notification) => void) {
+  const [officer, setOfficer] = useState<Officer | null>(null), [error, setError] = useState(''), [busy, setBusy] = useState(false);
+  const remote = useRef<{id: number | null; ack: number; source: LocationSource; uploading: Promise<void> | null}>({ id: null, ack: -1, source: 'demo', uploading: null });
+  const live = useRef<PositionSample | null>(null), positionQueue = useRef<PositionSample[]>([]), alertCursor = useRef(0), alertHandler = useRef(onAlert);
   alertHandler.current = onAlert;
-  const [restore, setRestore] = useState(null);
-  const pendingHeading = useRef(null);
-  const reportHeading = useCallback((heading, source) => {
+  const [restore, setRestore] = useState<RestoredPatrol | null>(null);
+  const pendingHeading = useRef<HeadingSample | null>(null);
+  const reportHeading = useCallback((heading: number | null, source: HeadingSource) => {
     pendingHeading.current = { heading, source, measured_at: new Date().toISOString() };
   }, []);
   useEffect(() => {
     if (!officer) return;
-    let sending = false, last = null, sentAt = 0, disposed = false;
+    let sending = false, last: HeadingSample | null = null, sentAt = 0, disposed = false;
     async function send() {
       const next = pendingHeading.current;
       if (!next || sending || disposed) return;
-      const angleChanged = Number.isFinite(next.heading) && (!Number.isFinite(last?.heading) || Math.abs(((next.heading-last.heading+540)%360)-180) >= 1);
+      const angleChanged = next.heading !== null && Number.isFinite(next.heading) && (!Number.isFinite(last?.heading) || Math.abs(((next.heading-last!.heading!+540)%360)-180) >= 1);
       if (last && !angleChanged && next.source === last.source && (next.heading === null) === (last.heading === null) && Date.now()-sentAt < 5000) return;
       sending = true;
       try {
@@ -51,8 +54,8 @@ export default function usePatrolServer(officerId, track, onAlert) {
     return () => { disposed = true; };
   }, [officerId]);
 
-  const reportPosition = useCallback((position, source, accuracy = 0) => {
-    const sample = { ...position, source: source === 'gps' ? 'gps' : 'demo', accuracy, measured_at: new Date().toISOString() };
+  const reportPosition = useCallback((position: Coordinates, source: LocationSource, accuracy = 0) => {
+    const sample: PositionSample = { ...position, source: source === 'gps' ? 'gps' : 'demo', accuracy, measured_at: new Date().toISOString() };
     live.current = sample;
     positionQueue.current.push(sample);
     if (positionQueue.current.length > 1000) positionQueue.current.shift();
@@ -65,7 +68,7 @@ export default function usePatrolServer(officerId, track, onAlert) {
       if (!state.id) return;
       while (state.ack + 1 < track.current.points.length) {
         const points = track.current.points.slice(state.ack + 1, state.ack + 501).map((p, i) => ({ lat: p.lat, lng: p.lng, sequence: state.ack + 1 + i, measured_at: new Date(p.time).toISOString(), source: p.source === 'start' ? state.source : p.source }));
-        const result = await api(`/officers/${officerId}/patrols/${state.id}/points`, { method: 'POST', body: jsonBody({ points }) });
+        const result = await api<{last_sequence: number}>(`/officers/${officerId}/patrols/${state.id}/points`, { method: 'POST', body: jsonBody({ points }) });
         state.ack = result.last_sequence;
       }
     })();
@@ -86,7 +89,7 @@ export default function usePatrolServer(officerId, track, onAlert) {
           positionQueue.current.shift();
         }
         await flushRoute();
-        const alerts = await api(`/officers/${officerId}/alerts?after=${alertCursor.current}`);
+        const alerts = await api<Alert[]>(`/officers/${officerId}/alerts?after=${alertCursor.current}`);
         for (const alert of alerts) {
           if (disposed) break;
           alertCursor.current = Math.max(alertCursor.current, alert.id);
@@ -100,10 +103,10 @@ export default function usePatrolServer(officerId, track, onAlert) {
     return () => { disposed = true; clearInterval(timer); };
   }, [officer, officerId, flushRoute]);
 
-  async function start(source) {
+  async function start(source: LocationSource) {
     setBusy(true);
     try {
-      const result = await api(`/officers/${officerId}/patrols`, { method: 'POST', body: jsonBody({ source }) });
+      const result = await api<Patrol>(`/officers/${officerId}/patrols`, { method: 'POST', body: jsonBody({ source }) });
       remote.current = { id: result.id, ack: -1, source, uploading: null };
       return result;
     } finally { setBusy(false); }
@@ -116,7 +119,7 @@ export default function usePatrolServer(officerId, track, onAlert) {
       remote.current.id = null;
     } finally { setBusy(false); }
   }
-  async function markRead(id) {
+  async function markRead(id: number) {
     await api(`/officers/${officerId}/alerts/${id}/read`, { method: 'POST' });
   }
   return { officer, error, busy, start, end, reportPosition, reportHeading, restore, markRead, setError };

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PatrolTrack } from './patrolTrack.js';
-import { moveTenMeters } from './location.js';
+import { PatrolTrack } from './patrolTrack';
+import { moveTenMeters } from './location';
 const origin = { lat: 35.1602002, lng: 129.054338 };
 
 test('시작 전·종료 후에는 기록하지 않고 다음 시작 시 초기화', () => {

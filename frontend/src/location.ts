@@ -1,5 +1,6 @@
-export function moveTenMeters(position, key) {
-  const bearings = { ArrowUp: 0, ArrowRight: 90, ArrowDown: 180, ArrowLeft: 270 };
+import type { Coordinates } from './types';
+export function moveTenMeters(position: Coordinates, key: string) {
+  const bearings: Record<string, number> = { ArrowUp: 0, ArrowRight: 90, ArrowDown: 180, ArrowLeft: 270 };
   if (!(key in bearings)) return position;
   const radians = Math.PI / 180;
   const latitude = position.lat * radians;

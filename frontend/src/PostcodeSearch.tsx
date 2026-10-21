@@ -1,15 +1,15 @@
 import React, { useEffect, useRef, useState } from 'react';
 
-export default function PostcodeSearch({ onComplete, onClose }) {
-  const dialog = useRef(null), frame = useRef(null), callbacks = useRef({ onComplete, onClose });
+export default function PostcodeSearch({ onComplete, onClose }: { onComplete: (address: {address: string; postal_code: string}) => void; onClose: () => void }) {
+  const dialog = useRef<HTMLDialogElement>(null), frame = useRef<HTMLIFrameElement>(null), callbacks = useRef({ onComplete, onClose });
   callbacks.current = { onComplete, onClose };
   const [error, setError] = useState(''), [loading, setLoading] = useState(true);
   useEffect(() => {
-    const element = dialog.current;
+    const element = dialog.current!;
     element.showModal();
     const fail = () => { setLoading(false); setError('주소 검색 서비스에 연결하지 못했습니다. 닫은 뒤 도로명 주소를 직접 검색해 주세요.'); };
     const timer = setTimeout(fail, 15000);
-    const receive = event => {
+    const receive = (event: MessageEvent) => {
       if (event.origin !== location.origin || event.source !== frame.current?.contentWindow) return;
       const data = event.data;
       if (data?.type === 'postcode-ready') { clearTimeout(timer); setLoading(false); }

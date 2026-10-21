@@ -1,10 +1,11 @@
-let sdkPromise;
-export function loadMap(key) {
+import type { NaverMaps } from './naverTypes';
+let sdkPromise: Promise<NaverMaps> | undefined;
+export function loadMap(key: string) {
   if (sdkPromise) return sdkPromise;
   if (window.naver?.maps?.Map) return Promise.resolve(window.naver.maps);
-  if (!sdkPromise) sdkPromise = new Promise((resolve, reject) => {
+  if (!sdkPromise) sdkPromise = new Promise<NaverMaps>((resolve, reject) => {
     const script = document.createElement('script');
-    const fail = message => { clearTimeout(timer); sdkPromise = undefined; script.remove(); reject(new Error(message)); };
+    const fail = (message: string) => { clearTimeout(timer); sdkPromise = undefined; script.remove(); reject(new Error(message)); };
     const timer = setTimeout(() => fail('지도 로딩 시간이 초과되었습니다. 네트워크 또는 등록 URL을 확인하고 다시 시도해 주세요.'), 15000);
     // SDK 콜백이 전역 Map 공개보다 먼저 호출되는 버전도 있어 다음 작업에서 확인한다.
     const ready = () => { if (window.naver?.maps?.Map) { clearTimeout(timer); resolve(window.naver.maps); } };

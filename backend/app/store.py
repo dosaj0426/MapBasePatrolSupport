@@ -21,6 +21,7 @@ class Officer(Base):
     __tablename__ = 'officers'
     id = Column(Integer, primary_key=True)
     name = Column(String(80), nullable=False)
+    active = Column(Boolean, nullable=False, default=True, server_default='1')
     lat = Column(Float)
     lng = Column(Float)
     source = Column(String(10))
@@ -94,13 +95,38 @@ class Alert(Base):
     created_at = Column(String(40), default=now)
     read = Column(Boolean, default=False)
 
+class PlaceImport(Base):
+    __tablename__ = 'place_imports'
+    id = Column(String(40), primary_key=True)
+    expires_at = Column(String(40), nullable=False)
+    payload_json = Column(Text, nullable=False)
+    errors_json = Column(Text, nullable=False)
+    committed_json = Column(Text)
+
+class AccessGrant(Base):
+    __tablename__ = 'access_grants'
+    id = Column(Integer, primary_key=True)
+    token_hash = Column(String(64), unique=True, nullable=False)
+    role = Column(String(10), nullable=False)
+    officer_id = Column(Integer, ForeignKey('officers.id'))
+    created_at = Column(String(40), default=now)
+    expires_at = Column(String(40), nullable=False)
+    revoked_at = Column(String(40))
+
+class AccessSession(Base):
+    __tablename__ = 'access_sessions'
+    id = Column(Integer, primary_key=True)
+    token_hash = Column(String(64), unique=True, nullable=False)
+    grant_id = Column(Integer, ForeignKey('access_grants.id'), nullable=False)
+    expires_at = Column(String(40), nullable=False)
+
 def row(obj): return {c.name: getattr(obj, c.name) for c in obj.__table__.columns}
 def init():
     Base.metadata.create_all(engine)
     from sqlalchemy import inspect, text
     columns = {c['name'] for c in inspect(engine).get_columns('officers')}
     with engine.begin() as connection:
-        for name, kind in [('heading', 'FLOAT'), ('heading_source', 'VARCHAR(20)'), ('heading_updated_at', 'VARCHAR(40)')]:
+        for name, kind in [('active', 'BOOLEAN NOT NULL DEFAULT 1'), ('heading', 'FLOAT'), ('heading_source', 'VARCHAR(20)'), ('heading_updated_at', 'VARCHAR(40)')]:
             if name not in columns: connection.execute(text(f'ALTER TABLE officers ADD COLUMN {name} {kind}'))
     patrol_columns = {c['name'] for c in inspect(engine).get_columns('patrols')}
     with engine.begin() as connection:

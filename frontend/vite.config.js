@@ -5,6 +5,6 @@ export default defineConfig({
     host: '127.0.0.1', port: 5173, strictPort: true,
     allowedHosts: ['safety-map.mcrolcharge.com'],
     headers: { 'Cache-Control': 'no-store, max-age=0' },
-    proxy: { '/api': 'http://127.0.0.1:8000' },
+    proxy: { '/api': { target: 'http://127.0.0.1:8000', changeOrigin: false } },
   },
 });

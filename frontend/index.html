@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="referrer" content="strict-origin-when-cross-origin" />
+    <meta name="referrer" content="no-referrer" />
     <title>스마트 순찰 지원</title>
   </head>
   <body>
@@ -25,7 +25,7 @@
         setTimeout(function () { show('화면 파일 로딩이 지연되고 있습니다. 최신 Chrome 또는 Safari에서 다시 시도해 주세요.'); }, 15000);
       }());
     </script>
-    <script type="module" src="/src/main.jsx"></script>
+    <script type="module" src="/src/main.tsx"></script>
     <script nomodule>document.getElementById('startup-message').textContent = '이 브라우저는 지원되지 않습니다. 최신 Chrome 또는 Safari로 접속해 주세요.';</script>
   </body>
 </html>
