@@ -17,6 +17,44 @@ from app.geo import zone_transition
 from fastapi.testclient import TestClient
 
 class ApiTests(unittest.TestCase):
+    def test_category_binding_fixed_buffer_and_edit(self):
+        c=self.client
+        image=io.BytesIO();Image.new('RGBA',(24,24),'blue').save(image,format='PNG')
+        icon=c.post('/api/icons',data={'name':'통합 분류 검증'},files={'file':('test.png',image.getvalue(),'image/png')}).json()
+        payload={'name':'통합 지점','category':icon['name'],'address':'테스트 주소','lat':35,'lng':129,'enhanced':True,'radius':100,'multiplier':8}
+        place=c.post('/api/places',json=payload).json()
+        self.assertEqual(place['icon_id'],icon['id'])
+        self.assertAlmostEqual(place['multiplier'],1.1)
+        self.assertEqual(c.post('/api/places',json={**payload,'category':'없는 분류'}).status_code,422)
+        self.assertEqual(c.post('/api/places',json={**payload,'icon_id':999999}).status_code,422)
+        self.assertEqual(c.post('/api/icons',data={'name':icon['name']},files={'file':('test.png',image.getvalue(),'image/png')}).status_code,409)
+        updated=c.put(f"/api/icons/{icon['id']}",data={'name':'변경된 통합 분류'},files={'file':('new.png',image.getvalue(),'image/png')})
+        self.assertEqual(updated.status_code,200)
+        self.assertNotEqual(updated.json()['filename'],icon['filename'])
+        saved=next(p for p in c.get('/api/places').json() if p['id']==place['id'])
+        self.assertEqual(saved['category'],'변경된 통합 분류')
+        self.assertEqual(saved['icon_id'],icon['id'])
+        self.assertEqual(c.put(f"/api/icons/{icon['id']}",data={'name':'CCTV'}).status_code,409)
+        self.assertEqual(c.patch(f"/api/icons/{icon['id']}",json={'name':'통합 분류 최종'}).status_code,200)
+        c.delete(f"/api/places/{place['id']}")
+
+    def test_existing_category_migration_preserves_results(self):
+        from app.store import Session,Place,Patrol,Officer,Icon,migrate_place_categories
+        from sqlalchemy import select
+        with Session.begin() as db:
+            officer=Officer(name='마이그레이션 검증');db.add(officer);db.flush()
+            patrol=Patrol(officer_id=officer.id,source='demo',ended_at=datetime.now(timezone.utc).isoformat(),zone_snapshot='[]',result_json='{"unchanged":true,"zones":[]}')
+            place=Place(name='기존 지점 검증',category='기존 분류 검증',address='테스트 주소',lat=35,lng=129,radius=50,multiplier=2,enhanced=True)
+            db.add_all([patrol,place]);db.flush();place_id,patrol_id=place.id,patrol.id
+        migrate_place_categories();migrate_place_categories()
+        with Session() as db:
+            place=db.get(Place,place_id)
+            self.assertEqual(db.get(Icon,place.icon_id).name,'기존 분류 검증')
+            self.assertAlmostEqual(place.multiplier,1.2)
+            self.assertEqual(len(list(db.scalars(select(Icon).where(Icon.name=='기존 분류 검증')))),1)
+            self.assertEqual(db.get(Patrol,patrol_id).result_json,'{"unchanged":true,"zones":[]}')
+        self.client.delete(f'/api/places/{place_id}')
+
     def test_browser_tts_default_does_not_call_model(self):
         from unittest.mock import patch
         from types import SimpleNamespace
@@ -59,6 +97,9 @@ class ApiTests(unittest.TestCase):
         from app.access import issue_grant
         with Session.begin() as db: _, link = issue_grant(db,'admin')
         assert cls.client.post('/api/access/exchange',json={'token':link.split('#')[1]}).status_code==200
+        from app.store import Icon
+        with Session.begin() as db:
+            db.add_all([Icon(name='테스트',filename='default-prevention-zone.png'),Icon(name='시설 점검',filename='default-prevention-zone.png')])
     @classmethod
     def tearDownClass(cls):
         cls.client_context.__exit__(None, None, None)
@@ -76,7 +117,7 @@ class ApiTests(unittest.TestCase):
         patrol = c.post(f"/api/officers/{officer['id']}/patrols", json={'source':'demo'}).json()
         base = datetime.now(timezone.utc)-timedelta(seconds=30)
         # inside -> buffer (does not rearm) -> inside -> outside -> inside
-        lats = [35,35.00055,35,35.001,35]
+        lats = [35,35.0005,35,35.001,35]
         points = [{'sequence':i,'lat':lat,'lng':129,'source':'demo','measured_at':(base+timedelta(seconds=i*5)).isoformat()} for i,lat in enumerate(lats)]
         url = f"/api/officers/{officer['id']}/patrols/{patrol['id']}"
         self.assertEqual(c.post(url+'/points', json={'points':points}).status_code,200)
@@ -347,7 +388,7 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(icon.status_code, 201)
         self.assertEqual(c.get('/api/icons?q=테스트').status_code, 200)
         self.assertEqual(c.post('/api/icons', data={'name':'bad'}, files={'file':('bad.png', b'<script>', 'image/png')}).status_code, 422)
-        place = {'name':'테스트 구역','category':'테스트','address':'부산진구 부전로111번길 6','lat':35.1602002,'lng':129.054338,'icon_id':icon.json()['id'],'enhanced':True,'radius':50,'multiplier':1.5,'message':'테스트 안내','alert_type':'danger'}
+        place = {'name':'테스트 구역','category':'테스트 아이콘','address':'부산진구 부전로111번길 6','lat':35.1602002,'lng':129.054338,'icon_id':icon.json()['id'],'enhanced':True,'radius':50,'multiplier':1.5,'message':'테스트 안내','alert_type':'danger'}
         result = c.post('/api/places', json=place); self.assertEqual(result.status_code, 201)
         def update(lat):
             return c.post(f'/api/officers/{officer["id"]}/location',json={'lat':lat,'lng':place['lng'],'source':'demo','measured_at':datetime.now(timezone.utc).isoformat()})
@@ -382,5 +423,9 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(zone_transition(True,50,50,1.5),(False,True))
         self.assertEqual(zone_transition(False,75,50,1.5),(False,False))
         self.assertEqual(zone_transition(False,76,50,1.5),(True,False))
+        for radius in (5,50,10000):
+            self.assertEqual(zone_transition(True,radius,radius,buffer_m=10),(False,True))
+            self.assertEqual(zone_transition(False,radius+10,radius,buffer_m=10),(False,False))
+            self.assertEqual(zone_transition(False,radius+10.01,radius,buffer_m=10),(True,False))
 
 if __name__ == '__main__': unittest.main()

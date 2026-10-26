@@ -32,11 +32,14 @@ def row_payload(record, icons):
     enhanced=record.get('강화구역','').lower() or 'n'
     if enhanced not in ('y','n'): raise ValueError('강화구역은 Y 또는 N을 입력해 주세요.')
     if record.get('우편번호') and not re.fullmatch(r'\d{5}',record['우편번호']): raise ValueError('우편번호는 비우거나 5자리 숫자로 입력해 주세요.')
+    category=record.get('분류','')
+    matches=[icon for icon in icons if icon.name==category]
+    if len(matches)!=1: raise ValueError('분류가 없거나 중복됩니다. 지점 분류 목록의 정확한 이름을 입력해 주세요.')
     icon_name=record.get('아이콘이름','')
-    matches=[icon for icon in icons if icon.name==icon_name]
-    if icon_name and len(matches)!=1: raise ValueError('아이콘이름이 없거나 중복됩니다. 목록의 정확한 이름을 입력하거나 비워 주세요.')
+    if icon_name and icon_name!=category: raise ValueError('아이콘은 분류에 따라 자동 지정됩니다. 아이콘이름을 비우거나 분류와 같게 입력해 주세요.')
+    radius=float(record.get('반지름(m)') or 50)
     return {'name':record.get('지점명',''),'category':record.get('분류',''),'address':record.get('도로명주소',''),
             'postal_code':record.get('우편번호',''),'detail':record.get('상세주소',''),
-            'icon_id':matches[0].id if matches else None,'enhanced':enhanced=='y',
-            'radius':float(record.get('반지름(m)') or 50),'multiplier':float(record.get('완충배수') or 1.5),
+            'icon_id':matches[0].id,'enhanced':enhanced=='y',
+            'radius':radius,'multiplier':(radius+10)/radius if radius>0 else 1.5,
             'alert_type':record.get('알림타입') or 'warning','message':record.get('음성안내','')}

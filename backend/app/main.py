@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field, ConfigDict, AwareDatetime
 from sqlalchemy import select, delete
 from .store import Session, init, row, now, Officer, Icon, Place, Patrol, Point, ZoneState, Alert, UPLOADS, PlaceImport
-from .geo import distance, zone_transition, relative_side, zone_message
+from .geo import distance, zone_transition, relative_side, zone_message, ZONE_BUFFER_M
 from .access import install_access, authenticate, COOKIE
 from .patrol_results import summarize
 from .place_csv import parse_csv, row_payload
@@ -227,7 +227,7 @@ def location(officer_id: int, data: PositionInput):
             if not state:
                 state = ZoneState(officer_id=officer_id, place_id=place.id, revision=place.revision, armed=True); db.add(state)
             if state.revision != place.revision: state.revision, state.armed = place.revision, True
-            state.armed, entered = zone_transition(state.armed, distance((data.lat, data.lng), (place.lat, place.lng)), place.radius, place.multiplier)
+            state.armed, entered = zone_transition(state.armed, distance((data.lat, data.lng), (place.lat, place.lng)), place.radius, buffer_m=ZONE_BUFFER_M)
             if entered:
                 sample=data.orientation
                 # Embedded orientation belongs to this location sample, avoiding queued-position/new-heading races.
@@ -253,7 +253,9 @@ def icons(q: str = ''):
 @app.post('/api/icons', status_code=201)
 async def upload_icon(name: str = Form(min_length=1, max_length=80), file: UploadFile = File()):
     name = name.strip()
-    if not name: raise HTTPException(422, '아이콘 이름을 입력해 주세요.')
+    if not name: raise HTTPException(422, '분류 이름을 입력해 주세요.')
+    with Session() as db:
+        if db.scalar(select(Icon.id).where(Icon.name==name)): raise HTTPException(409, '같은 이름의 분류가 있습니다.')
     content = await file.read(2 * 1024 * 1024 + 1)
     if len(content) > 2 * 1024 * 1024: raise HTTPException(413, '아이콘은 2MB 이하로 업로드해 주세요.')
     try:
@@ -276,11 +278,55 @@ async def upload_icon(name: str = Form(min_length=1, max_length=80), file: Uploa
 def places():
     with Session() as db: return [row(p) for p in db.scalars(select(Place).order_by(Place.id.desc()))]
 
+class CategoryName(Model):
+    name: str = Field(min_length=1,max_length=80)
+
+@app.patch('/api/icons/{icon_id}')
+def rename_category(icon_id: int, data: CategoryName):
+    with Session.begin() as db:
+        item=get_or_404(db,Icon,icon_id)
+        if db.scalar(select(Icon.id).where(Icon.name==data.name,Icon.id!=icon_id)):
+            raise HTTPException(409,'같은 이름의 분류가 있습니다.')
+        item.name=data.name
+        for place in db.scalars(select(Place).where(Place.icon_id==icon_id)): place.category=data.name
+        return {**row(item),'url':f'/api/uploads/icons/{item.filename}'}
+
+@app.put('/api/icons/{icon_id}')
+async def update_category(icon_id: int, name: str = Form(min_length=1,max_length=80), file: UploadFile | None = File(default=None)):
+    name=name.strip()
+    if not name: raise HTTPException(422,'분류 이름을 입력해 주세요.')
+    filename=None
+    if file:
+        content=await file.read(2*1024*1024+1)
+        if len(content)>2*1024*1024: raise HTTPException(413,'아이콘은 2MB 이하로 업로드해 주세요.')
+        try:
+            image=Image.open(io.BytesIO(content))
+            if image.format not in ('PNG','JPEG','WEBP') or image.width*image.height>16000000: raise ValueError()
+            image.load();image=image.convert('RGBA');image.thumbnail((128,128))
+        except (UnidentifiedImageError,ValueError,OSError,Image.DecompressionBombError):
+            raise HTTPException(422,'PNG·JPEG·WebP 이미지 파일만 사용할 수 있습니다.')
+        filename=uuid4().hex+'.png';image.save(UPLOADS/filename)
+    try:
+        with Session.begin() as db:
+            item=get_or_404(db,Icon,icon_id)
+            if db.scalar(select(Icon.id).where(Icon.name==name,Icon.id!=icon_id)): raise HTTPException(409,'같은 이름의 분류가 있습니다.')
+            item.name=name
+            if filename: item.filename=filename
+            for place in db.scalars(select(Place).where(Place.icon_id==icon_id)): place.category=name
+            return {**row(item),'url':f'/api/uploads/icons/{item.filename}'}
+    except Exception:
+        if filename: (UPLOADS/filename).unlink(missing_ok=True)
+        raise
+
 def save_place(db, data, item=None):
-    if data.icon_id is not None: get_or_404(db, Icon, data.icon_id)
+    category=db.scalar(select(Icon).where(Icon.name==data.category).order_by(Icon.id))
+    if category is None: raise HTTPException(422, '등록된 지점 분류를 선택해 주세요.')
+    if data.icon_id is not None and data.icon_id!=category.id: raise HTTPException(422, '분류와 아이콘이 일치하지 않습니다. 분류를 다시 선택해 주세요.')
     if item is None: item = Place(); db.add(item)
     else: item.revision += 1
     for key, value in data.model_dump().items(): setattr(item, key, value)
+    item.icon_id=category.id
+    item.multiplier=(item.radius+ZONE_BUFFER_M)/item.radius
     db.flush()
     return row(item)
 
@@ -443,7 +489,7 @@ def reverse_geocode(lat: float = Query(ge=-90, le=90), lng: float = Query(ge=-18
     return {'lat': lat, 'lng': lng, 'address': address, 'postal_code': postal, 'kind': kind}
 
 def zone_config(place):
-    return {key: getattr(place, key) for key in ('id', 'name', 'lat', 'lng', 'radius', 'multiplier')}
+    return {**{key: getattr(place, key) for key in ('id', 'name', 'lat', 'lng', 'radius')}, 'multiplier':(place.radius+ZONE_BUFFER_M)/place.radius, 'buffer_m': ZONE_BUFFER_M}
 
 def patrol_public(item):
     return {k:v for k,v in row(item).items() if k not in ('zone_snapshot', 'result_json')}

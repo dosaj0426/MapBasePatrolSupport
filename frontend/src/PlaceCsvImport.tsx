@@ -24,7 +24,7 @@ export default function PlaceCsvImport({onBack,onImported}:{onBack:()=>void;onIm
     <div className="admin-section-title"><div><p>IMPORT LOCATIONS</p><h1>위치 파일 추가</h1></div></div>
     <p className="admin-hint">CSV의 도로명 주소를 지도 좌표로 변환해 한 번에 등록합니다. 최대 50개·1MB, UTF-8 또는 CP949를 지원합니다.</p>
     <div className="csv-downloads"><a href="/templates/위치_일괄등록_양식.csv" download>빈 양식 다운로드 ↓</a><a href="/templates/위치_일괄등록_테스트.csv" download>테스트 CSV 다운로드 ↓</a></div>
-    <details className="csv-format"><summary>CSV 작성 방법</summary><p>필수: 지점명, 분류, 도로명주소</p><p>선택: 우편번호, 상세주소, 아이콘이름, 강화구역, 반지름(m), 완충배수, 알림타입, 음성안내</p><p>강화구역: Y/N (기본 N)<br/>반지름: 5~10000m (기본 50)<br/>완충배수: 1 초과~10 (기본 1.5)<br/>알림타입: info/warning/danger/emergency (기본 warning)</p><p>아이콘이름은 기존 목록과 정확히 일치해야 합니다. 비우면 기본 아이콘을 사용합니다. 우편번호는 5자리 문자열로 작성하세요. 쉼표가 들어간 값은 큰따옴표로 감싸 주세요.</p><p>테스트 파일은 실제 공공시설 주소를 사용한 가상 지점 3개이며 강화구역은 모두 N입니다. 업로드만으로 저장되지 않습니다.</p></details>
+    <details className="csv-format"><summary>CSV 작성 방법</summary><p>필수: 지점명, 분류, 도로명주소</p><p>선택: 우편번호, 상세주소, 강화구역, 반지름(m), 알림타입, 음성안내</p><p>강화구역: Y/N (기본 N)<br/>반지름: 5~10000m (기본 50)<br/>알림타입: info/warning/danger/emergency (기본 warning)</p><p>분류는 지점 분류 목록의 이름과 정확히 일치해야 하며 아이콘은 자동 지정됩니다. 기존 CSV의 완충배수는 무시하고 10m 고정 완충 거리를 적용합니다. 우편번호는 5자리 문자열로 작성하세요. 쉼표가 들어간 값은 큰따옴표로 감싸 주세요.</p><p>테스트 파일은 실제 공공시설 주소를 사용한 가상 지점 3개이며 강화구역은 모두 N입니다. 업로드만으로 저장되지 않습니다.</p></details>
     <label className="admin-search-label">CSV 파일<input type="file" accept=".csv,text/csv" disabled={busy} onChange={e=>{setFile(e.target.files?.[0]??null);setPreview(null);setMessage('');}}/></label>
     <button className="admin-secondary" disabled={!file || busy} onClick={inspect}>{busy?'처리 중…':'파일 검사 · 미리보기'}</button>
     {message && <p className="admin-message" role="status">{message}</p>}

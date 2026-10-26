@@ -9,7 +9,7 @@ export default function PlaceDetails({place, icon, records, loading, error, onBa
     <button className="history-back" onClick={onBack}>← 지점 목록으로</button>
     <div className="place-detail-title">{icon && <img src={icon.url} alt=""/>}<div><p>LOCATION DETAILS</p><h1>{place.name}</h1><span>{place.category}</span></div></div>
     <div className="place-detail-actions"><button className="admin-primary" onClick={onEdit}>정보 수정</button><button className="admin-danger" onClick={onDelete}>지점 삭제</button></div>
-    <dl className="place-detail-info"><dt>주소</dt><dd>{place.address}<br/>{place.detail || '상세 주소 없음'}</dd><dt>우편번호</dt><dd>{place.postal_code || '미등록'}</dd><dt>강화구역</dt><dd>{place.enhanced ? '사용 중' : '미사용'}</dd>{place.enhanced && <><dt>진입 범위</dt><dd>반지름 {place.radius}m</dd><dt>완충 범위</dt><dd>{Math.round(place.radius*place.multiplier)}m ({place.multiplier}배)</dd><dt>알림 타입</dt><dd>{getNotificationType(place.alert_type).label}</dd><dt>음성 안내</dt><dd>{place.message || `${place.name} 범죄예방 강화구역이 있습니다. 주변을 확인해 주세요.`}</dd></>}</dl>
+    <dl className="place-detail-info"><dt>주소</dt><dd>{place.address}<br/>{place.detail || '상세 주소 없음'}</dd><dt>우편번호</dt><dd>{place.postal_code || '미등록'}</dd><dt>강화구역</dt><dd>{place.enhanced ? '사용 중' : '미사용'}</dd>{place.enhanced && <><dt>진입 범위</dt><dd>반지름 {place.radius}m</dd><dt>알림 타입</dt><dd>{getNotificationType(place.alert_type).label}</dd><dt>음성 안내</dt><dd>{place.message || `${place.name} 범죄예방 강화구역이 있습니다. 주변을 확인해 주세요.`}</dd></>}</dl>
     <h2 className="admin-list-title">과거 점검 기록</h2>
     <p className="admin-hint">종료된 최근 순찰 200건에서 확인한 강화구역 진입 기록입니다. 현장 점검 완료 여부나 점검표를 의미하지 않습니다.</p>
     {loading ? <p role="status">기록을 불러오는 중입니다.</p> : error ? <p role="alert">{error}</p> : <>

@@ -1,5 +1,5 @@
 import type { MapInstance, Marker, Overlay } from './naverTypes';
-import type { Place, Icon, Officer, MapSelection, PatrolDetail, Coordinates } from './types';
+import type { Place, Icon, Officer, MapSelection, PatrolDetail, Coordinates, PlaceForm } from './types';
 import React, { useEffect, useRef, useState } from 'react';
 import { loadMap } from './naverMap';
 import { prepareMapTransport } from './mapTransport';
@@ -21,13 +21,12 @@ export function putPlaceOverlays(map: MapInstance, places: Place[], icons: Icon[
     overlays.push(marker);
     if (place.enhanced && showZoneRanges) {
       overlays.push(new maps.Circle({ map, center: point, radius: place.radius, strokeColor: '#dd7b25', strokeWeight: 2, fillColor: '#ed963d', fillOpacity: .16, clickable: false }));
-      overlays.push(new maps.Circle({ map, center: point, radius: place.radius * place.multiplier, strokeColor: '#dd7b25', strokeStyle: 'dash', strokeWeight: 1, fillOpacity: 0, clickable: false }));
     }
   }
   return () => overlays.forEach(o => { maps.Event.clearInstanceListeners(o); o.setMap(null); });
 }
 
-export default function ManagedMap({ places = [], icons = [], officers = [], selected, history, onSelect, onReady, onCenterChanged, onMapClick, onOfficerSelect }: {places?: Place[]; icons?: Icon[]; officers?: Officer[]; selected?: MapSelection | null; history?: PatrolDetail | null; onSelect?: (place: Place) => void; onReady?: (map: MapInstance) => void; onCenterChanged?: (center: Coordinates) => void; onMapClick?: (point: Coordinates) => void; onOfficerSelect?: (id: number) => void}) {
+export default function ManagedMap({ places = [], icons = [], officers = [], selected, history, onSelect, onReady, onCenterChanged, onMapClick, onOfficerSelect, draft }: {draft?: PlaceForm | null; places?: Place[]; icons?: Icon[]; officers?: Officer[]; selected?: MapSelection | null; history?: PatrolDetail | null; onSelect?: (place: Place) => void; onReady?: (map: MapInstance) => void; onCenterChanged?: (center: Coordinates) => void; onMapClick?: (point: Coordinates) => void; onOfficerSelect?: (id: number) => void}) {
   const framedHistory = useRef<number | null>(null);
   const officerMarkers = useRef(new Map<number, {marker: Marker; angle: number | null}>());
   const container = useRef<HTMLDivElement>(null), mapRef = useRef<MapInstance | null>(null), handlers = useRef({ onSelect, onReady, onCenterChanged, onMapClick, onOfficerSelect });
@@ -56,6 +55,12 @@ export default function ManagedMap({ places = [], icons = [], officers = [], sel
     }).catch(e => { if (!disposed) setError(e.message); });
     return () => { disposed = true; observer?.disconnect(); if (map) window.naver.maps.Event.clearInstanceListeners(map); map?.destroy(); mapRef.current = null; };
   }, []);
+  useEffect(()=>{
+    if(!ready || !draft?.enhanced || !Number.isFinite(draft.lat) || !Number.isFinite(draft.lng) || draft.radius<5 || draft.radius>10000)return;
+    const maps=window.naver.maps;
+    const circle=new maps.Circle({map:mapRef.current,center:new maps.LatLng(draft.lat!,draft.lng!),radius:draft.radius,strokeColor:'#2878e8',strokeWeight:3,fillColor:'#2878e8',fillOpacity:.18,clickable:false});
+    return()=>circle.setMap(null);
+  },[ready,draft?.enhanced,draft?.lat,draft?.lng,draft?.radius]);
   useEffect(() => { if (ready) return putPlaceOverlays(mapRef.current!, places, icons, p => handlers.current.onSelect?.(p)); }, [ready, places, icons]);
   useEffect(() => {
     if (!ready) return;

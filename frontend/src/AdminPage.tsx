@@ -13,7 +13,7 @@ import OfficerAccessLink from './OfficerAccessLink';
 import PlaceCsvImport from './PlaceCsvImport';
 import { logout } from './accessClient';
 
-const emptyPlace = (): PlaceForm => ({ name: '', category: '여성 1인 사업장', address: '', postal_code: '', detail: '', icon_id: '', enhanced: false, radius: 50, multiplier: 1.5, message: '', alert_type: 'warning' });
+const emptyPlace = (): PlaceForm => ({ name: '', category: '여성 1인 사업장', address: '', postal_code: '', detail: '', icon_id: '', enhanced: false, radius: 50, multiplier: 1.2, message: '', alert_type: 'warning' });
 const duration = (value: number) => `${Math.floor((value || 0)/60)}분 ${Math.floor((value || 0)%60)}초`;
 const formatTime = (value: string | null | undefined) => value ? new Date(value).toLocaleString('ko-KR') : '수신 대기';
 
@@ -72,7 +72,7 @@ export default function AdminPage() {
     player.enable().then(()=>player.speak(speechText)).catch(error=>setMessage(error.message));
     setMessage('이 기기의 기본 한국어 TTS로 미리듣기합니다.');
   }
-  const [iconName, setIconName] = useState(''), [iconFile, setIconFile] = useState<File | null>(null), [uploadKey, setUploadKey] = useState(0);
+  const [categoryEdit, setCategoryEdit] = useState<number | null>(null), [iconName, setIconName] = useState(''), [iconFile, setIconFile] = useState<File | null>(null), [uploadKey, setUploadKey] = useState(0);
   const [patrols, setPatrols] = useState<Patrol[]>([]), [filterOfficer, setFilterOfficer] = useState(''), [history, setHistory] = useState<PatrolDetail | null>(null);
   const refresh = useCallback(async () => {
     const [p, i] = await Promise.all([api('/places'), api('/icons')]);
@@ -128,7 +128,7 @@ export default function AdminPage() {
   }, [tab, historyId]);
   const updateForm = <K extends keyof PlaceForm,>(key: K, value: PlaceForm[K]) => setForm(previous => ({ ...previous, [key]: value }));
   function editPlace(place: Place) { setPlaceView('form'); speechPlayer.current?.cancel(); setTab('places'); setForm({ ...place, icon_id: place.icon_id ?? '' }); setEditId(place.id); setSelected(place); setQuery(place.address); setCandidates([]); setMessage(''); }
-  function clearForm() { setForm(emptyPlace()); setEditId(null); setQuery(''); setCandidates([]); setSelected(null); }
+  function clearForm() { const category=icons.find(icon=>icon.name==='여성 1인 사업장') ?? icons[0];setForm({...emptyPlace(),category:category?.name ?? '',icon_id:category?.id ?? ''}); setEditId(null); setQuery(''); setCandidates([]); setSelected(null); }
   async function searchAddress(address = query, postalCode = '') {
     lookupSequence.current++; setAddressLookup(false);
     setBusy(true); setMessage(''); setCandidates([]);
@@ -149,7 +149,7 @@ export default function AdminPage() {
     event.preventDefault(); if (addressLookup) return; if (!form.address.trim()) { setMessage('주소를 입력해 주세요.'); return; } if (!Number.isFinite(form.lat) || !Number.isFinite(form.lng)) { setMessage('주소 검색 결과를 선택해 위치를 확인해 주세요.'); return; }
     setBusy(true); setMessage('');
     try {
-      const payload = { ...form, icon_id: form.icon_id ? Number(form.icon_id) : null, radius: Number(form.radius), multiplier: Number(form.multiplier) };
+      const payload = { ...form, icon_id: form.icon_id ? Number(form.icon_id) : null, radius: Number(form.radius) };
       const result = await api<Place>(editId ? `/places/${editId}` : '/places', { method: editId ? 'PUT' : 'POST', body: jsonBody(payload) });
       await refresh(); clearForm(); openPlace(result); setMessage('지점을 저장했습니다. 순찰자 화면에도 반영됩니다.');
     } catch(e) { setMessage(e.message); } finally { setBusy(false); }
@@ -174,15 +174,15 @@ export default function AdminPage() {
     try { await api(`/officers/${officer.id}`, { method: 'PATCH', body: jsonBody({ name: data.get('name') }) }); await refresh(); setMessage('순찰자 이름을 변경했습니다.'); } catch(e) { setMessage(e.message); }
   }
   async function uploadIcon(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault(); if (!iconFile) return;
-    setBusy(true); const data = new FormData(); data.append('name', iconName); data.append('file', iconFile);
-    try { await api('/icons', { method: 'POST', body: data }); await refresh(); setIconName(''); setIconFile(null); setUploadKey(k => k+1); setMessage('아이콘을 서버에 등록했습니다.'); } catch(e) { setMessage(e.message); } finally { setBusy(false); }
+    event.preventDefault(); if (!iconFile && categoryEdit===null) return;
+    setBusy(true); const data = new FormData(); data.append('name', iconName); if(iconFile)data.append('file', iconFile);
+    try { await api(categoryEdit===null?'/icons':`/icons/${categoryEdit}`, { method: categoryEdit===null?'POST':'PUT', body: data }); await refresh(); setIconName(''); setIconFile(null); setUploadKey(k => k+1); setCategoryEdit(null);setMessage('지점 분류를 저장했습니다. 연결된 지점에도 반영됩니다.'); } catch(e) { setMessage(e.message); } finally { setBusy(false); }
   }
 
   return <div className="admin-workspace">
     <header className="admin-topbar"><div><a href="/" className="admin-brand">SMART PATROL</a><span>관리자 워크스페이스</span></div><div><a href="/user">순찰자 선택 ↗</a><button onClick={()=>logout().catch(e=>setMessage(e.message))}>접속 종료</button></div></header>
     <div className="admin-body"><section className="admin-editor">
-      <nav className="admin-tabs" aria-label="관리자 메뉴">{[['places','지점 관리'],['icons','아이콘'],['officers','순찰자'],['history','순찰 기록']].map(([id,label]) => <button key={id} className={tab===id?'selected':''} onClick={()=>{officerNavigation.current++;setTab(id);setHistory(null);backToPlaces();}}>{label}</button>)}</nav>
+      <nav className="admin-tabs" aria-label="관리자 메뉴">{[['places','지점 관리'],['icons','지점 분류'],['officers','순찰자'],['history','순찰 기록']].map(([id,label]) => <button key={id} className={tab===id?'selected':''} onClick={()=>{officerNavigation.current++;setTab(id);setHistory(null);backToPlaces();}}>{label}</button>)}</nav>
       {message && <p className="admin-message" role="status">{message}</p>}
       <div className="admin-scroll">
         {tab === 'places' && placeView === 'list' && <>
@@ -200,7 +200,9 @@ export default function AdminPage() {
           <p className="admin-hint" role="status">지도에서 원하는 위치를 클릭하면 위치와 주소가 자동 입력됩니다. 도로명 주소 검색으로도 지정할 수 있습니다.</p>
           <form onSubmit={savePlace} className="admin-form">
             <label>지점 이름<input required maxLength={100} value={form.name} onChange={e=>updateForm('name',e.target.value)} placeholder="예: ○○ 사업장" /></label>
-            <label>분류<input required list="place-categories" maxLength={80} value={form.category} onChange={e=>updateForm('category',e.target.value)} /></label><datalist id="place-categories"><option>여성 1인 사업장</option><option>범죄자 거주지</option><option>여성안심귀갓길</option><option>CCTV</option><option>시설 점검</option><option>기타</option></datalist>
+            <label>분류<select required value={form.icon_id} onChange={e=>{const category=icons.find(icon=>icon.id===Number(e.target.value));setForm(previous=>({...previous,category:category?.name ?? '',icon_id:category?.id ?? ''}));}}><option value="" disabled>지점 분류를 선택하세요</option>{icons.map(icon=><option key={icon.id} value={icon.id}>{icon.name}</option>)}</select></label>
+            {icons.find(icon=>icon.id===Number(form.icon_id)) && <div className="category-selection"><img src={icons.find(icon=>icon.id===Number(form.icon_id))!.url} alt="선택한 분류 아이콘"/><span>{form.category}</span></div>}
+            {!icons.length && <p className="admin-hint">지점 분류 메뉴에서 분류와 아이콘을 먼저 등록해 주세요.</p>}
             <label>도로명 주소 검색<div className="admin-input-row"><input value={query} onChange={e=>{setQuery(e.target.value);setForm(f=>({...f,address:'',lat:undefined,lng:undefined}));}} placeholder="도로명 + 건물 번호" onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();if(query.trim().length>=3 && !busy)searchAddress();}}} /><button type="button" disabled={busy || query.length<3} onClick={()=>searchAddress()}>검색</button></div></label>
             <button className="admin-secondary" type="button" disabled={busy} onClick={()=>setPostcodeOpen(true)}>우편번호·주소 찾기</button>
             {postcodeOpen && <PostcodeSearch onClose={()=>setPostcodeOpen(false)} onComplete={result=>{setPostcodeOpen(false);setQuery(result.address);setForm(f=>({...f,address:result.address,postal_code:result.postal_code,lat:undefined,lng:undefined}));searchAddress(result.address,result.postal_code);}} />}
@@ -208,11 +210,9 @@ export default function AdminPage() {
             {form.address && <p className="admin-address-selected">{Number.isFinite(form.lat) && Number.isFinite(form.lng) ? '✓' : '…'} {form.address}<small>우편번호 {form.postal_code || '미제공'} · {Number.isFinite(form.lat) && Number.isFinite(form.lng) ? '지도 위치 확인 완료' : '좌표 변환이 필요합니다. 주소 검색을 완료해 주세요.'}</small></p>}
             {Number.isFinite(form.lat) && Number.isFinite(form.lng) && <label>등록 주소<input required value={form.address} onChange={e=>{lookupSequence.current++;setAddressLookup(false);updateForm('address',e.target.value);}} placeholder="자동 변환 실패 시 주소를 직접 입력해 주세요."/><small>{addressLookup?'주소 자동 입력 중…':'지도에서 선택한 좌표로 저장합니다. 주소 수정은 좌표를 변경하지 않습니다.'}</small></label>}
             <label>상세 주소<input maxLength={200} value={form.detail} onChange={e=>updateForm('detail',e.target.value)} placeholder="동·층·호수 등" /></label>
-            <label>아이콘 이름 검색<input value={iconQuery} onChange={e=>setIconQuery(e.target.value)} placeholder="아이콘 검색" /></label>
-            <div className="icon-picker"><button type="button" className={!form.icon_id?'selected':''} onClick={()=>updateForm('icon_id','')}>⌖ 기본</button>{icons.filter(i=>i.name.toLowerCase().includes(iconQuery.toLowerCase())).map(icon=><button key={icon.id} type="button" className={Number(form.icon_id)===icon.id?'selected':''} onClick={()=>updateForm('icon_id',icon.id)}><img src={icon.url} alt=""/>{icon.name}</button>)}</div>
             <fieldset className="enhanced-settings"><label className="admin-check"><input type="checkbox" checked={form.enhanced} onChange={e=>updateForm('enhanced',e.target.checked)} />범죄예방 강화구역</label>{form.enhanced && <>
-              <div className="admin-two-cols"><label>진입 반지름 (m)<input required type="number" min={5} max={10000} value={form.radius} onChange={e=>updateForm('radius',Number(e.target.value))} /></label><label>외곽 범위 배수<input required type="number" min={1.1} max={10} step={.1} value={form.multiplier} onChange={e=>updateForm('multiplier',Number(e.target.value))} /></label></div>
-              <small>내부 {form.radius}m 진입 시 안내 · 외곽 {Math.round(form.radius*form.multiplier)}m 이탈 후 재알림</small>
+              <label>진입 반지름 (m)<input required type="number" min={5} max={10000} value={form.radius} onChange={e=>updateForm('radius',Number(e.target.value))} /></label>
+              <small>반지름을 바꾸면 지도에서 저장 전 범위를 확인할 수 있습니다.</small>
               <label>알림 타입<select value={form.alert_type} onChange={e=>updateForm('alert_type',e.target.value as AlertType)}>{Object.entries(NOTIFICATION_TYPES).map(([id,type])=><option key={id} value={id}>{type.label}</option>)}</select></label>
               <label>음성 안내 문구<textarea maxLength={500} value={form.message} onChange={e=>updateForm('message',e.target.value)} placeholder="비워두면 기본 안내 · 방향은 순찰자 기준으로 자동 추가" /></label>
               <small>기기의 기본 한국어 TTS를 사용합니다. 기기마다 목소리가 다를 수 있습니다.</small>
@@ -222,7 +222,7 @@ export default function AdminPage() {
           </form>
 
         </>}
-        {tab === 'icons' && <><div className="admin-section-title"><div><p>ICON LIBRARY</p><h1>아이콘 관리</h1></div></div><form className="admin-form" onSubmit={uploadIcon}><label>아이콘 이름<input required maxLength={80} value={iconName} onChange={e=>setIconName(e.target.value)}/></label><label>이미지 업로드<input key={uploadKey} required type="file" accept="image/png,image/jpeg,image/webp" onChange={e=>setIconFile(e.target.files?.[0] ?? null)}/></label><small>PNG·JPEG·WebP, 최대 2MB · 서버에서 128px PNG로 변환</small><button className="admin-primary" disabled={busy}>아이콘 등록</button></form><label className="admin-search-label">이름으로 찾기<input value={iconQuery} onChange={e=>setIconQuery(e.target.value)}/></label><div className="icon-library">{icons.filter(i=>i.name.toLowerCase().includes(iconQuery.toLowerCase())).map(i=><article key={i.id}><img src={i.url} alt={i.name}/><strong>{i.name}</strong></article>)}</div>{!icons.length && <p className="admin-empty">등록된 아이콘이 없습니다.</p>}</>}
+        {tab === 'icons' && <><div className="admin-section-title"><div><p>PLACE CATEGORIES</p><h1>지점 분류</h1></div></div><p className="admin-hint">분류 이름과 아이콘을 함께 관리합니다. 지점에서 분류를 선택하면 아이콘이 자동 적용됩니다.</p><form className="admin-form" onSubmit={uploadIcon}><h2>{categoryEdit===null?'새 분류 등록':'분류 수정'}</h2><label>분류 이름<input required maxLength={80} value={iconName} onChange={e=>setIconName(e.target.value)}/></label><label>{categoryEdit===null?'분류 아이콘':'아이콘 변경 (선택)'}<input key={uploadKey} required={categoryEdit===null} type="file" accept="image/png,image/jpeg,image/webp" onChange={e=>setIconFile(e.target.files?.[0] ?? null)}/></label><small>PNG·JPEG·WebP, 최대 2MB · 수정 시 이미지를 선택하지 않으면 기존 아이콘을 유지합니다.</small><button className="admin-primary" disabled={busy}>{categoryEdit===null?'분류 등록':'분류 수정 저장'}</button>{categoryEdit!==null && <button type="button" className="admin-secondary" onClick={()=>{setCategoryEdit(null);setIconName('');setIconFile(null);setUploadKey(k=>k+1);}}>수정 취소</button>}</form><label className="admin-search-label">분류 찾기<input value={iconQuery} onChange={e=>setIconQuery(e.target.value)}/></label><div className="category-library">{icons.filter(i=>i.name.toLowerCase().includes(iconQuery.toLowerCase())).map(i=><article className="category-card" key={i.id}><img src={i.url} alt=""/><strong>{i.name}</strong><button onClick={()=>{setCategoryEdit(i.id);setIconName(i.name);setIconFile(null);setUploadKey(k=>k+1);}}>수정</button></article>)}</div>{!icons.length && <p className="admin-empty">등록된 분류가 없습니다.</p>}</>}
         {tab === 'officers' && <><div className="admin-section-title"><div><p>PATROL TEAM</p><h1>순찰자 관리</h1></div></div><form className="admin-form" onSubmit={createOfficer}><label>새 순찰자 이름<input required maxLength={80} value={officerName} onChange={e=>setOfficerName(e.target.value)} placeholder="예: 서면 순찰 1호"/></label><button disabled={busy} className="admin-primary">순찰자 생성</button></form><p className="admin-hint">현재 위치는 5초마다 수신하고 방향은 실시간으로 반영합니다. 마지막 수신 시각과 GPS·데모 구분을 확인하세요.</p>{officers.map(o=><article className="admin-officer-card" key={o.id}><form onSubmit={e=>renameOfficer(e,o)}><input name="name" required maxLength={80} defaultValue={o.name} aria-label={`${o.name} 이름`}/><button disabled={busy}>이름 저장</button></form><div className="admin-officer-meta"><span>{o.active_patrol_id?'순찰 중':'대기'} · {o.source || '위치 미수신'}</span><small>마지막 수신: {formatTime(o.updated_at)}</small></div><div className="admin-card-actions"><a href={o.url}>{o.url} 접속 ↗</a><button disabled={o.lat==null && !o.active_patrol_id} onClick={()=>showOfficer(o.id)}>{o.active_patrol_id?'순찰 경로 보기':'지도 위치'}</button></div><OfficerAccessLink officerId={o.id}/><div className="officer-remove-row"><small>{o.active_patrol_id?'순찰 종료 후 제거할 수 있습니다.':'제거해도 과거 순찰 기록은 보존됩니다.'}</small><button className="admin-danger" disabled={busy || o.active_patrol_id!==null} onClick={()=>removeOfficer(o)}>순찰자 제거</button></div></article>)}{!officers.length && <p className="admin-empty">순찰자를 생성하면 개별 접속 주소가 발급됩니다.</p>}</>}
         {tab === 'history' && (history ? <>
           <button className="history-back" onClick={()=>setHistory(null)}>← 순찰 기록 목록으로</button>
@@ -239,6 +239,6 @@ export default function AdminPage() {
           </> : <p>결과를 불러오는 중입니다.</p>}
         </> : <><div className="admin-section-title"><div><p>PATROL HISTORY</p><h1>순찰 기록</h1></div></div><label className="admin-search-label">순찰자<select value={filterOfficer} onChange={e=>setFilterOfficer(e.target.value)}><option value="">전체 순찰자</option>{officers.map(o=><option key={o.id} value={o.id}>{o.name}</option>)}</select></label>{patrols.map(p=><button className="admin-history-card" key={p.id} onClick={async()=>{try{setSelected(null);setHistory(await api(`/patrols/${p.id}`));}catch(e){setMessage(e.message);}}}><strong>{p.officer_name} · 순찰 #{p.id}</strong><span>{p.source==='demo'?'데모 시작':'GPS 시작'} · {p.ended_at?'종료':'진행 중'}</span><small>{formatTime(p.started_at)} ~ {p.ended_at?formatTime(p.ended_at):'진행 중'}</small></button>)}{!patrols.length && <p className="admin-empty">저장된 순찰 기록이 없습니다.</p>}</>)}
       </div>
-    </section><section className="admin-map-area" aria-label="관리자 지도"><ManagedMap places={places} icons={icons} officers={officers} selected={selected} history={history} onSelect={place=>{if(tab==='places' && placeView==='form') pickMapPosition(place); else openPlace(place);}} onOfficerSelect={showOfficer} onMapClick={pickMapPosition} onCenterChanged={setMapCenter}/><div className="admin-map-legend"><strong>관리 지도</strong><span>▲ 순찰자　⌖ 등록 지점</span><small>주황 실선: 진입 범위 · 점선: 재진입 완충 범위</small></div></section></div>
+    </section><section className="admin-map-area" aria-label="관리자 지도"><ManagedMap places={tab==='places' && placeView==='form'?places.filter(place=>place.id!==editId):places} draft={tab==='places' && placeView==='form'?form:null} icons={icons} officers={officers} selected={selected} history={history} onSelect={place=>{if(tab==='places' && placeView==='form') pickMapPosition({lat:place.lat,lng:place.lng}); else openPlace(place);}} onOfficerSelect={showOfficer} onMapClick={pickMapPosition} onCenterChanged={setMapCenter}/><div className="admin-map-legend"><strong>관리 지도</strong><span>▲ 순찰자　⌖ 등록 지점</span><small>주황 원: 범죄예방 강화구역 · 파란 원: 저장 전 미리보기</small></div></section></div>
   </div>;
 }

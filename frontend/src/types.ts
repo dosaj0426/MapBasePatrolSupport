@@ -10,7 +10,7 @@ export interface Address extends Coordinates { address: string; postal_code: str
 export interface Place extends Address { id: number; name: string; category: string; detail: string; icon_id: number | null; enhanced: boolean; radius: number; multiplier: number; message: string; alert_type: AlertType; revision: number }
 export interface PlaceForm { name: string; category: string; address: string; postal_code: string; detail: string; icon_id: number | ''; enhanced: boolean; radius: number; multiplier: number; message: string; alert_type: AlertType; lat?: number; lng?: number }
 export type MapSelection = Partial<Place> & Coordinates;
-export interface ZoneResult extends Coordinates { id: number; name: string; radius: number; multiplier: number; entry_count: number; dwell_seconds: number; first_entry_at: string | null; last_entry_at: string | null }
+export interface ZoneResult extends Coordinates { buffer_m?: number; id: number; name: string; radius: number; multiplier: number; entry_count: number; dwell_seconds: number; first_entry_at: string | null; last_entry_at: string | null }
 export interface PatrolResult { duration_seconds: number; distance_m: number; entry_count: number; visited_zone_count: number; zones: ZoneResult[]; legacy: boolean; estimated: boolean }
 export interface Patrol { id: number; officer_id: number; officer_name?: string; started_at: string; ended_at: string | null; source: LocationSource }
 export interface PatrolDetail extends Patrol { points: StoredPoint[]; result: PatrolResult }

@@ -133,6 +133,27 @@ def init():
         for name in ('zone_snapshot', 'result_json'):
             if name not in patrol_columns: connection.execute(text(f'ALTER TABLE patrols ADD COLUMN {name} TEXT'))
     seed_default_icons()
+    migrate_place_categories()
+
+def migrate_place_categories():
+    """Preserve existing category labels and images; never rewrite saved patrol results."""
+    from sqlalchemy import select
+    from .geo import ZONE_BUFFER_M
+    with Session.begin() as db:
+        icons=list(db.scalars(select(Icon).order_by(Icon.id)))
+        by_name={}
+        for icon in icons: by_name.setdefault(icon.name,icon)
+        for place in db.scalars(select(Place)):
+            category=by_name.get(place.category)
+            if category is None:
+                previous=db.get(Icon,place.icon_id) if place.icon_id else None
+                category=Icon(name=place.category,filename=previous.filename if previous else 'default-prevention-zone.png')
+                db.add(category);db.flush();by_name[category.name]=category
+            place.icon_id=category.id
+            # Legacy multiplier is retained only as a compatibility representation.
+            multiplier=(place.radius+ZONE_BUFFER_M)/place.radius
+            if abs(place.multiplier-multiplier)>1e-9:
+                place.multiplier=multiplier
 
 def seed_default_icons():
     """새 DB에도 기본 아이콘 제공. 파일명으로 확인해 재실행 시 중복 방지."""
@@ -145,5 +166,5 @@ def seed_default_icons():
         for item in items:
             target = UPLOADS / item['filename']
             if not target.exists(): shutil.copyfile(assets / item['source'], target)
-            if db.scalar(select(Icon).where(Icon.filename == item['filename'])) is None:
+            if db.scalar(select(Icon).where((Icon.filename == item['filename']) | (Icon.name == item['name']))) is None:
                 db.add(Icon(name=item['name'], filename=item['filename']))

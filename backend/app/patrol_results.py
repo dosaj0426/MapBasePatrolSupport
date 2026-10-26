@@ -18,7 +18,7 @@ def summarize(points, zones, started_at, ended_at=None, legacy=False):
             if previous:
                 dt = t - previous[0]
                 if 0 <= dt <= 30 and previous[1]: dwell += dt
-            armed, entered = zone_transition(armed, d, zone['radius'], zone['multiplier'])
+            armed, entered = zone_transition(armed, d, zone['radius'], zone['multiplier'], zone.get('buffer_m'))
             if entered:
                 count += 1
                 first_entry = first_entry or point['measured_at']
